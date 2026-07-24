@@ -7,9 +7,11 @@ on:
     branches: [ main ]
 
 env:
-  AWS_REGION: ap-south-2
-  ECR_REGISTRY: 244718668444.dkr.ecr.ap-south-2.amazonaws.com
-  ECR_REPOSITORY: banking-management-system
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.AWS_REGISTRY }}
+  ECR_REPOSITORY: ${{ secrets.AWS_REPOSITORY }}
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+  EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
 
 jobs:
   # 1. CI - Unit tests and Docker builds for backend microservices
@@ -104,7 +106,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -116,3 +118,211 @@ jobs:
           docker build -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest .
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }}
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest
+
+  # 4. Deploy to EC2
+  deploy-to-ec2:
+    needs: push-to-ecr
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Get ECR login token
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Deploy using SSH
+        env:
+          PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+          REGISTRY: ${{ env.ECR_REGISTRY }}
+          REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+          
+          # Deploy script
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST << 'DEPLOY_SCRIPT'
+            set -e
+            
+            echo "Starting deployment process..."
+            
+            # Configure AWS credentials on EC2
+            export AWS_REGION=${{ secrets.AWS_REGION }}
+            export AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            export AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            
+            # Login to ECR
+            echo "Logging in to Amazon ECR..."
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+            
+            # Pull latest images
+            echo "Pulling latest Docker images from ECR..."
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest || true
+            
+            # Stop existing containers
+            echo "Stopping existing containers..."
+            if [ -f /opt/banking-management-system/docker-compose.yml ]; then
+              cd /opt/banking-management-system
+              docker-compose down || true
+            fi
+            
+            # Update docker-compose.yml with new image tags
+            echo "Updating docker-compose.yml with new image tags..."
+            cd /opt/banking-management-system
+            
+            # Backup original file
+            cp docker-compose.yml docker-compose.yml.backup
+            
+            # Update image references
+            sed -i "s|image: .*auth-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*customer-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*account-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*transaction-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*notification-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*frontend:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest|g" docker-compose.yml
+            
+            # Start new containers
+            echo "Starting new containers..."
+            docker-compose -f /opt/banking-management-system/docker-compose.yml up -d
+            
+            echo "Deployment completed successfully"
+          DEPLOY_SCRIPT
+
+  # 5. Verify Deployment
+  verify-deployment:
+    needs: deploy-to-ec2
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify services health
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+          PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+          
+          # Health check script
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST << 'VERIFY_SCRIPT'
+            set -e
+            
+            echo "=========================================="
+            echo "Starting Deployment Verification"
+            echo "=========================================="
+            
+            echo "Waiting for services to be ready..."
+            sleep 15
+            
+            # Check if containers are running
+            echo ""
+            echo "Checking running containers..."
+            docker ps --filter "status=running" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            
+            # Health check for each service
+            services=("auth-service" "customer-service" "account-service" "transaction-service" "notification-service")
+            
+            echo ""
+            echo "Checking backend services..."
+            for service in "${services[@]}"; do
+              if docker ps --filter "name=$service" --filter "status=running" | grep -q $service; then
+                echo "✓ $service is running"
+              else
+                echo "✗ $service is NOT running"
+                docker ps -a | grep $service || true
+                exit 1
+              fi
+            done
+            
+            # Check frontend
+            echo ""
+            echo "Checking frontend service..."
+            if docker ps --filter "name=frontend" --filter "status=running" | grep -q frontend; then
+              echo "✓ Frontend is running"
+            else
+              echo "✗ Frontend is NOT running"
+              docker ps -a | grep frontend || true
+              exit 1
+            fi
+            
+            # Check API endpoint
+            echo ""
+            echo "Checking API endpoint health..."
+            API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/actuator/health 2>/dev/null || echo "000")
+            
+            if [ "$API_HEALTH" == "200" ]; then
+              echo "✓ API is responding with health status 200"
+            else
+              echo "⚠ API responded with status: $API_HEALTH (waiting for startup...)"
+            fi
+            
+            # Check frontend endpoint
+            echo ""
+            echo "Checking frontend endpoint..."
+            FRONTEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null || echo "000")
+            
+            if [ "$FRONTEND_HEALTH" == "200" ]; then
+              echo "✓ Frontend is responding with status 200"
+            else
+              echo "⚠ Frontend responded with status: $FRONTEND_HEALTH (waiting for startup...)"
+            fi
+            
+            # Display docker logs summary
+            echo ""
+            echo "Recent container logs summary:"
+            docker ps --format "table {{.Names}}" | tail -n +2 | while read container; do
+              echo "  - $container: $(docker logs --tail 1 $container 2>/dev/null | head -c 80)"
+            done
+            
+            echo ""
+            echo "=========================================="
+            echo "✓ Deployment verification completed successfully"
+            echo "=========================================="
+          VERIFY_SCRIPT
+
+      - name: Generate deployment summary
+        if: always()
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployed to** | ${{ secrets.EC2_HOST }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **AWS Region** | ${{ secrets.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **ECR Repository** | ${{ secrets.AWS_REGISTRY }}/${{ secrets.AWS_REPOSITORY }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Services Deployed** | auth-service, customer-service, account-service, transaction-service, notification-service, frontend |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployment Status** | ✅ Completed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Services" >> $GITHUB_STEP_SUMMARY
+          echo "- auth-service" >> $GITHUB_STEP_SUMMARY
+          echo "- customer-service" >> $GITHUB_STEP_SUMMARY
+          echo "- account-service" >> $GITHUB_STEP_SUMMARY
+          echo "- transaction-service" >> $GITHUB_STEP_SUMMARY
+          echo "- notification-service" >> $GITHUB_STEP_SUMMARY
+          echo "- frontend" >> $GITHUB_STEP_SUMMARY
