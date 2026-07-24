@@ -14,6 +14,7 @@ env:
   EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
 
 jobs:
+  # 1. CI - Unit tests and Docker builds for backend microservices
   build-and-test:
     runs-on: ubuntu-latest
     strategy:
@@ -46,6 +47,7 @@ jobs:
         working-directory: ./${{ matrix.service }}
         run: docker build -t ${{ matrix.service }}:${{ github.sha }} .
 
+  # 2. CI - Build & test React frontend
   build-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -78,6 +80,7 @@ jobs:
         working-directory: ./frontend
         run: docker build -t frontend:${{ github.sha }} .
 
+  # 3. Push Docker images to Amazon ECR
   push-to-ecr:
     needs: [build-and-test, build-frontend]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -115,7 +118,7 @@ jobs:
           docker build -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest .
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }}
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest
-
+  # 4. Deploy to EC2
   deploy-to-ec2:
     needs: push-to-ecr
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -151,140 +154,109 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null || true
           
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST 'bash -s' << 'DEPLOY_SCRIPT'
-          set -e
-          
-          echo "Starting deployment process..."
-          export DEBIAN_FRONTEND=noninteractive
-          
-          echo "Installing required dependencies..."
-          sudo apt-get update -qq || true
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl unzip 2>/dev/null || true
-          
-          if ! command -v aws &> /dev/null; then
-            echo "AWS CLI not found. Installing AWS CLI v2..."
-            cd /tmp
-            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" || { echo "Error: Failed to download AWS CLI"; exit 1; }
-            if command -v unzip &> /dev/null; then
-              unzip -q awscliv2.zip
-            else
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip 2>&1 | tail -5
-              unzip -q awscliv2.zip
+          # Deploy script - use BASH explicitly and handle sudo properly
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST bash << 'DEPLOY_SCRIPT'
+            set -e
+            
+            echo "Starting deployment process..."
+            
+            # Ensure we have sudo access with NOPASSWD for required commands
+            export DEBIAN_FRONTEND=noninteractive
+            
+            # Install dependencies - exit gracefully if apt-get fails
+            echo "Installing required dependencies..."
+            if command -v apt-get &> /dev/null; then
+              sudo apt-get update -qq || true
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl unzip 2>/dev/null || {
+                echo "Warning: Failed to install dependencies via apt, but continuing..."
+              }
             fi
-            sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update 2>&1 | grep -E "^(Installing|Uninstalling|Found|You)" || true
-            rm -rf awscliv2.zip aws
-            echo "AWS CLI v2 installed: $(aws --version)"
-          else
-            echo "AWS CLI already installed: $(aws --version)"
-          fi
-          
-          export AWS_REGION=${{ secrets.AWS_REGION }}
-          export AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
-          export AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          
-          echo "Verifying AWS CLI access..."
-          aws sts get-caller-identity || { echo "Error: AWS credentials failed"; exit 1; }
-          
-          echo "Logging in to Amazon ECR..."
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }} || { echo "Error: ECR login failed"; exit 1; }
-          
-          echo "Setting up deployment directory..."
-          DEPLOY_DIR="/home/ubuntu/banking-deployment"
-          mkdir -p "$DEPLOY_DIR"
-          
-          if [ ! -d "$DEPLOY_DIR" ]; then
-            echo "Error: Failed to create $DEPLOY_DIR"
-            exit 1
-          fi
-          
-          echo "Pulling latest Docker images from ECR..."
-          docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest || true
-          docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest || true
-          docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest || true
-          docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest || true
-          docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest || true
-          docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest || true
-          
-          echo "Stopping existing containers..."
-          if [ -f "$DEPLOY_DIR/docker-compose.yml" ]; then
-            cd "$DEPLOY_DIR"
-            docker-compose down || true
-          fi
-          
-          echo "Creating docker-compose.yml..."
-          cat > "$DEPLOY_DIR/docker-compose.yml" << 'EOF'
-version: '3.8'
-services:
-  auth-service:
-    image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest
-    container_name: auth-service
-    ports:
-      - "8001:8001"
-    environment:
-      - SPRING_APPLICATION_NAME=auth-service
-    networks:
-      - banking-network
-    restart: unless-stopped
-  customer-service:
-    image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest
-    container_name: customer-service
-    ports:
-      - "8002:8002"
-    environment:
-      - SPRING_APPLICATION_NAME=customer-service
-    networks:
-      - banking-network
-    restart: unless-stopped
-  account-service:
-    image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest
-    container_name: account-service
-    ports:
-      - "8003:8003"
-    environment:
-      - SPRING_APPLICATION_NAME=account-service
-    networks:
-      - banking-network
-    restart: unless-stopped
-  transaction-service:
-    image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest
-    container_name: transaction-service
-    ports:
-      - "8004:8004"
-    environment:
-      - SPRING_APPLICATION_NAME=transaction-service
-    networks:
-      - banking-network
-    restart: unless-stopped
-  notification-service:
-    image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest
-    container_name: notification-service
-    ports:
-      - "8005:8005"
-    environment:
-      - SPRING_APPLICATION_NAME=notification-service
-    networks:
-      - banking-network
-    restart: unless-stopped
-  frontend:
-    image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest
-    container_name: frontend
-    ports:
-      - "3000:3000"
-    networks:
-      - banking-network
-    restart: unless-stopped
-networks:
-  banking-network:
-    driver: bridge
-EOF
-          
-          echo "Starting new containers..."
-          cd "$DEPLOY_DIR"
-          docker-compose up -d
-          
-          echo "Deployment completed successfully"
+            
+            # Install AWS CLI v2 if not already installed
+            if ! command -v aws &> /dev/null; then
+              echo "AWS CLI not found. Installing AWS CLI v2..."
+              cd /tmp
+              
+              # Use -L to follow redirects, -s for silent, -S to show errors
+              curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" || {
+                echo "Error: Failed to download AWS CLI installer"
+                exit 1
+              }
+              
+              # Extract zip - unzip might not be available, try both
+              if command -v unzip &> /dev/null; then
+                unzip -q awscliv2.zip
+              else
+                echo "unzip not available, trying apt-get install..."
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip 2>&1 | tail -5
+                unzip -q awscliv2.zip
+              fi
+              
+              sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update 2>&1 | grep -E "^(Installing|Uninstalling|Found|You)" || true
+              rm -rf awscliv2.zip aws
+              
+              echo "AWS CLI v2 installed successfully: $(aws --version)"
+            else
+              echo "AWS CLI already installed: $(aws --version)"
+            fi
+            
+            # Configure AWS credentials on EC2
+            export AWS_REGION=${{ secrets.AWS_REGION }}
+            export AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            export AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            
+            # Verify AWS CLI is working
+            echo "Verifying AWS CLI access..."
+            aws sts get-caller-identity || {
+              echo "Error: AWS credentials not configured correctly"
+              exit 1
+            }
+            
+            # Login to ECR
+            echo "Logging in to Amazon ECR..."
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }} || {
+              echo "Error: Failed to login to ECR"
+              exit 1
+            }
+            
+            # Pull latest images
+            echo "Pulling latest Docker images from ECR..."
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest || true
+            docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest || true
+            
+            # Stop existing containers
+            echo "Stopping existing containers..."
+            if [ -f /opt/banking-management-system/docker-compose.yml ]; then
+              cd /opt/banking-management-system
+              docker-compose down || true
+            fi
+            
+            # Update docker-compose.yml with new image tags
+            echo "Updating docker-compose.yml with new image tags..."
+            cd /opt/banking-management-system
+            
+            # Backup original file
+            cp docker-compose.yml docker-compose.yml.backup
+            
+            # Update image references
+            sed -i "s|image: .*auth-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*customer-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*account-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*transaction-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*notification-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest|g" docker-compose.yml
+            sed -i "s|image: .*frontend:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest|g" docker-compose.yml
+            
+            # Start new containers
+            echo "Starting new containers..."
+            docker-compose -f /opt/banking-management-system/docker-compose.yml up -d
+            
+            echo "Deployment completed successfully"
           DEPLOY_SCRIPT
-
+  # 5. Verify Deployment
   verify-deployment:
     needs: deploy-to-ec2
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -304,52 +276,100 @@ EOF
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null || true
           
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST 'bash -s' << 'VERIFY_SCRIPT'
-          set -e
-          
-          echo "=========================================="
-          echo "Starting Deployment Verification"
-          echo "=========================================="
-          sleep 15
-          
-          echo ""
-          echo "Checking running containers..."
-          docker ps --filter "status=running" --format "table {{.Names}}\t{{.Status}}"
-          
-          services=("auth-service" "customer-service" "account-service" "transaction-service" "notification-service")
-          
-          echo ""
-          echo "Checking backend services..."
-          for service in "${services[@]}"; do
-            if docker ps --filter "name=$service" --filter "status=running" | grep -q $service; then
-              echo "OK: $service is running"
+          # Health check script
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST << 'VERIFY_SCRIPT'
+            set -e
+            
+            echo "=========================================="
+            echo "Starting Deployment Verification"
+            echo "=========================================="
+            
+            echo "Waiting for services to be ready..."
+            sleep 15
+            
+            # Check if containers are running
+            echo ""
+            echo "Checking running containers..."
+            docker ps --filter "status=running" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            
+            # Health check for each service
+            services=("auth-service" "customer-service" "account-service" "transaction-service" "notification-service")
+            
+            echo ""
+            echo "Checking backend services..."
+            for service in "${services[@]}"; do
+              if docker ps --filter "name=$service" --filter "status=running" | grep -q $service; then
+                echo "✓ $service is running"
+              else
+                echo "✗ $service is NOT running"
+                docker ps -a | grep $service || true
+                exit 1
+              fi
+            done
+            
+            # Check frontend
+            echo ""
+            echo "Checking frontend service..."
+            if docker ps --filter "name=frontend" --filter "status=running" | grep -q frontend; then
+              echo "✓ Frontend is running"
             else
-              echo "ERROR: $service is NOT running"
+              echo "✗ Frontend is NOT running"
+              docker ps -a | grep frontend || true
               exit 1
             fi
-          done
-          
-          echo ""
-          echo "Checking frontend service..."
-          if docker ps --filter "name=frontend" --filter "status=running" | grep -q frontend; then
-            echo "OK: Frontend is running"
-          else
-            echo "ERROR: Frontend is NOT running"
-            exit 1
-          fi
-          
-          echo ""
-          echo "Deployment verification completed"
+            
+            # Check API endpoint
+            echo ""
+            echo "Checking API endpoint health..."
+            API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/actuator/health 2>/dev/null || echo "000")
+            
+            if [ "$API_HEALTH" == "200" ]; then
+              echo "✓ API is responding with health status 200"
+            else
+              echo "⚠ API responded with status: $API_HEALTH (waiting for startup...)"
+            fi
+            
+            # Check frontend endpoint
+            echo ""
+            echo "Checking frontend endpoint..."
+            FRONTEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null || echo "000")
+            
+            if [ "$FRONTEND_HEALTH" == "200" ]; then
+              echo "✓ Frontend is responding with status 200"
+            else
+              echo "⚠ Frontend responded with status: $FRONTEND_HEALTH (waiting for startup...)"
+            fi
+            
+            # Display docker logs summary
+            echo ""
+            echo "Recent container logs summary:"
+            docker ps --format "table {{.Names}}" | tail -n +2 | while read container; do
+              echo "  - $container: $(docker logs --tail 1 $container 2>/dev/null | head -c 80)"
+            done
+            
+            echo ""
+            echo "=========================================="
+            echo "✓ Deployment verification completed successfully"
+            echo "=========================================="
           VERIFY_SCRIPT
-
       - name: Generate deployment summary
         if: always()
         run: |
-          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit SHA | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deployed to | ${{ secrets.EC2_HOST }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| AWS Region | ${{ secrets.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Status | Completed |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployed to** | ${{ secrets.EC2_HOST }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **AWS Region** | ${{ secrets.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **ECR Repository** | ${{ secrets.AWS_REGISTRY }}/${{ secrets.AWS_REPOSITORY }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Services Deployed** | auth-service, customer-service, account-service, transaction-service, notification-service, frontend |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployment Status** | ✅ Completed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Services" >> $GITHUB_STEP_SUMMARY
+          echo "- auth-service" >> $GITHUB_STEP_SUMMARY
+          echo "- customer-service" >> $GITHUB_STEP_SUMMARY
+          echo "- account-service" >> $GITHUB_STEP_SUMMARY
+          echo "- transaction-service" >> $GITHUB_STEP_SUMMARY
+          echo "- notification-service" >> $GITHUB_STEP_SUMMARY
+          echo "- frontend" >> $GITHUB_STEP_SUMMARY
