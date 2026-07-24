@@ -119,7 +119,6 @@ jobs:
           docker build -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest .
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }}
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest
-
   # 4. Deploy to EC2
   deploy-to-ec2:
     needs: push-to-ecr
@@ -149,15 +148,13 @@ jobs:
           echo "$PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null || true
-
       - name: Ensure deploy directory exists on EC2
         env:
           HOST: ${{ secrets.EC2_HOST }}
           USER: ${{ secrets.EC2_USERNAME }}
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST \
-            "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R $(whoami):$(whoami) ${{ env.DEPLOY_DIR }}"
-
+            "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R \$(whoami):\$(whoami) ${{ env.DEPLOY_DIR }}"
       - name: Copy docker-compose.yml to EC2
         env:
           HOST: ${{ secrets.EC2_HOST }}
@@ -165,7 +162,6 @@ jobs:
         run: |
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             docker-compose.yml $USER@$HOST:${{ env.DEPLOY_DIR }}/docker-compose.yml
-
       - name: Copy .env file to EC2
         env:
           HOST: ${{ secrets.EC2_HOST }}
@@ -177,7 +173,6 @@ jobs:
           else
             echo "Warning: .env file not found in repository"
           fi
-
       - name: Deploy using SSH
         env:
           HOST: ${{ secrets.EC2_HOST }}
@@ -191,30 +186,13 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST bash << 'DEPLOY_SCRIPT'
             set -e
-
             echo "Starting deployment process..."
             export DEBIAN_FRONTEND=noninteractive
-
-            # Configure AWS credentials file
-            mkdir -p ~/.aws
-            cat > ~/.aws/credentials << EOF
-[default]
-aws_access_key_id = $AWS_ACCESS_KEY_ID
-aws_secret_access_key = $AWS_SECRET_ACCESS_KEY
-EOF
-            cat > ~/.aws/config << EOF
-[default]
-region = $AWS_REGION
-EOF
-            chmod 600 ~/.aws/credentials
-            chmod 600 ~/.aws/config
-
             # Install dependencies
             if command -v apt-get &> /dev/null; then
               sudo apt-get update -qq || true
               sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl unzip 2>/dev/null || true
             fi
-
             # Install AWS CLI v2 if missing
             if ! command -v aws &> /dev/null; then
               echo "Installing AWS CLI v2..."
@@ -224,32 +202,25 @@ EOF
               sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
               rm -rf awscliv2.zip aws
             fi
-
             # Verify AWS credentials
             aws sts get-caller-identity || { echo "AWS credentials invalid"; exit 1; }
-
             echo "Logging in to Amazon ECR..."
             aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-
             echo "Pulling latest Docker images from ECR..."
             for svc in auth-service customer-service account-service transaction-service notification-service frontend; do
               docker pull "$REGISTRY/$REPOSITORY:${svc}-latest" || true
             done
-
             # Navigate to deployment directory
             if [ ! -f "$DEPLOY_DIR/docker-compose.yml" ]; then
               echo "Error: $DEPLOY_DIR/docker-compose.yml not found. Did the copy step run?"
               exit 1
             fi
             cd "$DEPLOY_DIR"
-
             # Stop existing containers
             echo "Stopping existing containers..."
             docker compose down || true
-
             # Backup original file
             cp docker-compose.yml docker-compose.yml.backup
-
             # Update image references
             echo "Updating docker-compose.yml with new image tags..."
             sed -i "s|image: .*auth-service:.*|image: $REGISTRY/$REPOSITORY:auth-service-latest|g" docker-compose.yml
@@ -258,7 +229,6 @@ EOF
             sed -i "s|image: .*transaction-service:.*|image: $REGISTRY/$REPOSITORY:transaction-service-latest|g" docker-compose.yml
             sed -i "s|image: .*notification-service:.*|image: $REGISTRY/$REPOSITORY:notification-service-latest|g" docker-compose.yml
             sed -i "s|image: .*frontend:.*|image: $REGISTRY/$REPOSITORY:frontend-latest|g" docker-compose.yml
-
             # Load environment variables if .env exists
             if [ -f "$DEPLOY_DIR/.env" ]; then
               echo "Loading environment variables from .env..."
@@ -266,14 +236,11 @@ EOF
               source "$DEPLOY_DIR/.env"
               set +a
             fi
-
             # Start new containers
             echo "Starting new containers..."
             docker compose -f "$DEPLOY_DIR/docker-compose.yml" up -d
-
             echo "Deployment completed successfully"
           DEPLOY_SCRIPT
-
   # 5. Verify Deployment
   verify-deployment:
     needs: deploy-to-ec2
@@ -293,22 +260,17 @@ EOF
           echo "$PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null || true
-
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST << 'VERIFY_SCRIPT'
             set -e
             echo "=========================================="
             echo "Starting Deployment Verification"
             echo "=========================================="
-
             echo "Waiting for services to be ready..."
             sleep 15
-
             echo ""
             echo "Checking running containers..."
             docker ps --filter "status=running" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
             services=("auth-service" "customer-service" "account-service" "transaction-service" "notification-service")
-
             echo ""
             echo "Checking backend services..."
             for service in "${services[@]}"; do
@@ -320,7 +282,6 @@ EOF
                 exit 1
               fi
             done
-
             echo ""
             echo "Checking frontend service..."
             if docker ps --filter "name=frontend" --filter "status=running" | grep -q frontend; then
@@ -330,7 +291,6 @@ EOF
               docker ps -a | grep frontend || true
               exit 1
             fi
-
             echo ""
             echo "Checking API endpoint health..."
             API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/health 2>/dev/null || echo "000")
@@ -339,7 +299,6 @@ EOF
             else
               echo "⚠ API responded with status: $API_HEALTH"
             fi
-
             echo ""
             echo "Checking frontend endpoint..."
             FRONTEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null || echo "000")
@@ -348,19 +307,16 @@ EOF
             else
               echo "⚠ Frontend responded with status: $FRONTEND_HEALTH"
             fi
-
             echo ""
             echo "Recent container logs summary:"
             docker ps --format "table {{.Names}}" | tail -n +2 | while read container; do
               echo "  - $container: $(docker logs --tail 1 $container 2>/dev/null | head -c 80)"
             done
-
             echo ""
             echo "=========================================="
             echo "✓ Deployment verification completed successfully"
             echo "=========================================="
           VERIFY_SCRIPT
-
       - name: Generate deployment summary
         if: always()
         run: |
