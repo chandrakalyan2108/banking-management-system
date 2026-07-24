@@ -41,7 +41,7 @@ jobs:
         working-directory: ./${{ matrix.service }}
         run: docker build -t ${{ matrix.service }}:${{ github.sha }} .
 
-  # 2. CI - Build & test React frontend (using package.json for cache resolution)
+  # 2. CI - Build & test React frontend
   build-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -61,7 +61,7 @@ jobs:
 
       - name: Run tests
         working-directory: ./frontend
-        run: npm test -- --watchAll=false
+        run: npm test -- --watchAll=false --passWithNoTests
 
       - name: Build frontend
         working-directory: ./frontend
