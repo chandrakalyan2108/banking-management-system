@@ -123,6 +123,10 @@ jobs:
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest
 
   # 4. Deploy to EC2
+  # The deploy/verify logic lives in scripts/deploy-remote.sh and
+  # scripts/verify-remote.sh (checked into the repo). They're copied to the
+  # server via scp and executed directly -- no heredocs embedded in this
+  # YAML file, which avoids the bash-vs-YAML indentation conflict entirely.
   # Auth to ECR happens ON THE EC2 BOX using its attached IAM instance role
   # (AmazonEC2ContainerRegistryReadOnly). No AWS keys are sent over SSH.
   deploy-to-ec2:
@@ -141,7 +145,7 @@ jobs:
           mkdir -p ~/.ssh
           echo "$PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Ensure deploy directory exists on EC2
         env:
@@ -171,7 +175,15 @@ jobs:
             echo "Warning: .env file not found in repository"
           fi
 
-      - name: Deploy using SSH
+      - name: Copy deploy script to EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            scripts/deploy-remote.sh "$USER@$HOST:${{ env.DEPLOY_DIR }}/deploy-remote.sh"
+
+      - name: Run deploy script on EC2
         env:
           HOST: ${{ secrets.EC2_HOST }}
           USER: ${{ secrets.EC2_USERNAME }}
@@ -180,82 +192,8 @@ jobs:
           DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          # Everything the remote script needs is passed as VAR=value
-          # assignments baked into this single command string sent to ssh.
-          # A step's `env:` block on the runner never crosses the SSH
-          # boundary on its own -- this is the only way values get there.
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
-            "AWS_REGION='$AWS_REGION' REGISTRY='$REGISTRY' REPOSITORY='$REPOSITORY' DEPLOY_DIR='$DEPLOY_DIR' bash -s" << 'DEPLOY_SCRIPT'
-            set -e
-
-            echo "Starting deployment process..."
-            export DEBIAN_FRONTEND=noninteractive
-
-            # Install dependencies
-            if command -v apt-get &> /dev/null; then
-              sudo apt-get update -qq || true
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl unzip 2>/dev/null || true
-            fi
-
-            # Install AWS CLI v2 if missing
-            if ! command -v aws &> /dev/null; then
-              echo "Installing AWS CLI v2..."
-              cd /tmp
-              curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-              unzip -q awscliv2.zip
-              sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
-              rm -rf awscliv2.zip aws
-            fi
-
-            # No AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are set here on
-            # purpose -- the instance's attached IAM role provides these
-            # credentials automatically via the EC2 metadata service.
-            echo "Verifying instance role credentials..."
-            aws sts get-caller-identity || {
-              echo "Error: no usable AWS credentials found. Confirm an IAM role"
-              echo "with AmazonEC2ContainerRegistryReadOnly is attached to this instance."
-              exit 1
-            }
-
-            echo "Logging in to Amazon ECR..."
-            aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
-
-            echo "Pulling latest Docker images from ECR..."
-            for svc in auth-service customer-service account-service transaction-service notification-service frontend; do
-              docker pull "$REGISTRY/$REPOSITORY:${svc}-latest" || true
-            done
-
-            if [ ! -f "$DEPLOY_DIR/docker-compose.yml" ]; then
-              echo "Error: $DEPLOY_DIR/docker-compose.yml not found. Did the copy step run?"
-              exit 1
-            fi
-            cd "$DEPLOY_DIR"
-
-            echo "Stopping existing containers..."
-            docker compose down || true
-
-            cp docker-compose.yml docker-compose.yml.backup
-
-            echo "Updating docker-compose.yml with new image tags..."
-            sed -i "s|image: .*auth-service:.*|image: $REGISTRY/$REPOSITORY:auth-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*customer-service:.*|image: $REGISTRY/$REPOSITORY:customer-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*account-service:.*|image: $REGISTRY/$REPOSITORY:account-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*transaction-service:.*|image: $REGISTRY/$REPOSITORY:transaction-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*notification-service:.*|image: $REGISTRY/$REPOSITORY:notification-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*frontend:.*|image: $REGISTRY/$REPOSITORY:frontend-latest|g" docker-compose.yml
-
-            if [ -f "$DEPLOY_DIR/.env" ]; then
-              echo "Loading environment variables from .env..."
-              set -a
-              source "$DEPLOY_DIR/.env"
-              set +a
-            fi
-
-            echo "Starting new containers..."
-            docker compose -f "$DEPLOY_DIR/docker-compose.yml" up -d
-
-            echo "Deployment completed successfully"
-DEPLOY_SCRIPT
+            "chmod +x '$DEPLOY_DIR/deploy-remote.sh' && AWS_REGION='$AWS_REGION' REGISTRY='$REGISTRY' REPOSITORY='$REPOSITORY' DEPLOY_DIR='$DEPLOY_DIR' bash '$DEPLOY_DIR/deploy-remote.sh'"
 
   # 5. Verify Deployment
   verify-deployment:
@@ -266,83 +204,31 @@ DEPLOY_SCRIPT
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Verify services health
+      - name: Set up SSH key
         env:
-          HOST: ${{ secrets.EC2_HOST }}
-          USER: ${{ secrets.EC2_USERNAME }}
           PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          HOST: ${{ secrets.EC2_HOST }}
         run: |
           mkdir -p ~/.ssh
           echo "$PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" << 'VERIFY_SCRIPT'
-            set -e
-            echo "=========================================="
-            echo "Starting Deployment Verification"
-            echo "=========================================="
+      - name: Copy verify script to EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            scripts/verify-remote.sh "$USER@$HOST:${{ env.DEPLOY_DIR }}/verify-remote.sh"
 
-            echo "Waiting for services to be ready..."
-            sleep 15
-
-            echo ""
-            echo "Checking running containers..."
-            docker ps --filter "status=running" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-            services=("auth-service" "customer-service" "account-service" "transaction-service" "notification-service")
-
-            echo ""
-            echo "Checking backend services..."
-            for service in "${services[@]}"; do
-              if docker ps --filter "name=$service" --filter "status=running" | grep -q $service; then
-                echo "OK: $service is running"
-              else
-                echo "FAIL: $service is NOT running"
-                docker ps -a | grep $service || true
-                exit 1
-              fi
-            done
-
-            echo ""
-            echo "Checking frontend service..."
-            if docker ps --filter "name=frontend" --filter "status=running" | grep -q frontend; then
-              echo "OK: Frontend is running"
-            else
-              echo "FAIL: Frontend is NOT running"
-              docker ps -a | grep frontend || true
-              exit 1
-            fi
-
-            echo ""
-            echo "Checking API endpoint health..."
-            API_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/health 2>/dev/null || echo "000")
-            if [ "$API_HEALTH" == "200" ]; then
-              echo "OK: API is responding with health status 200"
-            else
-              echo "WARN: API responded with status: $API_HEALTH"
-            fi
-
-            echo ""
-            echo "Checking frontend endpoint..."
-            FRONTEND_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null || echo "000")
-            if [ "$FRONTEND_HEALTH" == "200" ]; then
-              echo "OK: Frontend is responding with status 200"
-            else
-              echo "WARN: Frontend responded with status: $FRONTEND_HEALTH"
-            fi
-
-            echo ""
-            echo "Recent container logs summary:"
-            docker ps --format "table {{.Names}}" | tail -n +2 | while read container; do
-              echo "  - $container: $(docker logs --tail 1 $container 2>/dev/null | head -c 80)"
-            done
-
-            echo ""
-            echo "=========================================="
-            echo "Deployment verification completed successfully"
-            echo "=========================================="
-          VERIFY_SCRIPT
+      - name: Run verify script on EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
+            "chmod +x '${{ env.DEPLOY_DIR }}/verify-remote.sh' && bash '${{ env.DEPLOY_DIR }}/verify-remote.sh'"
 
       - name: Generate deployment summary
         if: always()
