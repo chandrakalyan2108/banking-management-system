@@ -91,7 +91,6 @@ jobs:
           - transaction-service
           - notification-service
           - frontend
-          - nginx
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -113,44 +112,5 @@ jobs:
       - name: Build, tag, and push image
         working-directory: ./${{ matrix.service }}
         run: |
-          docker build -t ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:latest .
-          docker push ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:${{ github.sha }}
-          docker push ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:latest
-
-  # 4. Deploy to EC2 via SSH
-  deploy-to-ec2:
-    needs: push-to-ecr
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy to EC2 instance
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            cd /home/${{ secrets.EC2_USERNAME }}/banking-management-system
-            which aws || (sudo apt-get update && sudo apt-get install -y awscli)
-            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
-            docker compose pull
-            docker compose up -d
-            docker image prune -f
-
-  # 5. Verify deployment via ALB target group health check
-  verify-deployment:
-    needs: deploy-to-ec2
-    runs-on: ubuntu-latest
-    steps:
-      - name: Health check
-        run: |
-          for i in {1..10}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.ALB_DNS_NAME }}/health || echo "000")
-            if [ "$STATUS" -eq 200 ]; then
-              echo "Application is live and healthy."
-              exit 0
-            fi
-            echo "Waiting for application to become healthy... ($i/10)"
-            sleep 10
-          done
-          echo "Health check failed after deployment."
-          exit 1
+          docker build -t ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/banking-${{ matrix
+
