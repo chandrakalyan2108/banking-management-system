@@ -7,8 +7,12 @@ on:
     branches: [ main ]
 
 env:
-  AWS_REGION: ap-south-2
-  ECR_REGISTRY: 244718668444.dkr.ecr.ap-south-2.amazonaws.com
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.AWS_REGISTRY }}
+  ECR_REPOSITORY: ${{ secrets.AWS_REPOSITORY }}
+  EC2_HOST: ${{ secrets.EC2_HOST }}
+  EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+  DEPLOY_DIR: /opt/banking-management-system
 
 jobs:
   # 1. CI - Unit tests and Docker builds for backend microservices
@@ -25,6 +29,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -48,6 +55,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -67,7 +77,13 @@ jobs:
         working-directory: ./frontend
         run: npm run build
 
+      - name: Build frontend Docker image
+        working-directory: ./frontend
+        run: docker build -t frontend:${{ github.sha }} .
+
   # 3. Push Docker images to Amazon ECR
+  # This job runs entirely on the GitHub-hosted runner, so using static
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets here is fine.
   push-to-ecr:
     needs: [build-and-test, build-frontend]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -81,17 +97,19 @@ jobs:
           - transaction-service
           - notification-service
           - frontend
-          - nginx
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -100,43 +118,128 @@ jobs:
       - name: Build, tag, and push image
         working-directory: ./${{ matrix.service }}
         run: |
-          docker build -t $ECR_REGISTRY/banking-${{ matrix.service }}:${{ github.sha }} -t $ECR_REGISTRY/banking-${{ matrix.service }}:latest .
-          docker push $ECR_REGISTRY/banking-${{ matrix.service }}:${{ github.sha }}
-          docker push $ECR_REGISTRY/banking-${{ matrix.service }}:latest
+          docker build -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest .
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest
 
-  # 4. Deploy to EC2 via SSH
+  # 4. Deploy to EC2
+  # The deploy/verify logic lives in scripts/deploy-remote.sh and
+  # scripts/verify-remote.sh (checked into the repo). They're copied to the
+  # server via scp and executed directly -- no heredocs embedded in this
+  # YAML file, which avoids the bash-vs-YAML indentation conflict entirely.
+  # Auth to ECR happens ON THE EC2 BOX using its attached IAM instance role
+  # (AmazonEC2ContainerRegistryReadOnly). No AWS keys are sent over SSH.
   deploy-to-ec2:
     needs: push-to-ecr
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to EC2 instance
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            cd /home/${{ secrets.EC2_USERNAME }}/banking-management-system
-            aws ecr get-login-password --region ap-south-2 | docker login --username AWS --password-stdin 244718668444.dkr.ecr.ap-south-2.amazonaws.com
-            docker compose pull
-            docker compose up -d
-            docker image prune -f
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  # 5. Verify deployment via ALB target group health check
+      - name: Set up SSH key
+        env:
+          PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Ensure deploy directory exists on EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
+            "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R \$(whoami):\$(whoami) ${{ env.DEPLOY_DIR }}"
+
+      - name: Copy docker-compose.yml to EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            docker-compose.yml "$USER@$HOST:${{ env.DEPLOY_DIR }}/docker-compose.yml"
+
+      - name: Copy .env file to EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          if [ -f .env ]; then
+            scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+              .env "$USER@$HOST:${{ env.DEPLOY_DIR }}/.env"
+          else
+            echo "Warning: .env file not found in repository"
+          fi
+
+      - name: Copy deploy script to EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            scripts/deploy-remote.sh "$USER@$HOST:${{ env.DEPLOY_DIR }}/deploy-remote.sh"
+
+      - name: Run deploy script on EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+          REGISTRY: ${{ env.ECR_REGISTRY }}
+          REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
+            "chmod +x '$DEPLOY_DIR/deploy-remote.sh' && AWS_REGION='$AWS_REGION' REGISTRY='$REGISTRY' REPOSITORY='$REPOSITORY' DEPLOY_DIR='$DEPLOY_DIR' bash '$DEPLOY_DIR/deploy-remote.sh'"
+
+  # 5. Verify Deployment
   verify-deployment:
     needs: deploy-to-ec2
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Health check
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        env:
+          PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+          HOST: ${{ secrets.EC2_HOST }}
         run: |
-          for i in {1..10}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.ALB_DNS_NAME }}/health || echo "000")
-            if [ "$STATUS" -eq 200 ]; then
-              echo "Application is live and healthy."
-              exit 0
-            fi
-            echo "Waiting for application to become healthy... ($i/10)"
-            sleep 10
-          done
-          echo "Health check failed after deployment."
-          exit 1
+          mkdir -p ~/.ssh
+          echo "$PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Copy verify script to EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            scripts/verify-remote.sh "$USER@$HOST:${{ env.DEPLOY_DIR }}/verify-remote.sh"
+
+      - name: Run verify script on EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
+            "chmod +x '${{ env.DEPLOY_DIR }}/verify-remote.sh' && bash '${{ env.DEPLOY_DIR }}/verify-remote.sh'"
+
+      - name: Generate deployment summary
+        if: always()
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployed to** | ${{ secrets.EC2_HOST }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **AWS Region** | ${{ secrets.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **ECR Repository** | ${{ secrets.AWS_REGISTRY }}/${{ secrets.AWS_REPOSITORY }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Services Deployed** | auth-service, customer-service, account-service, transaction-service, notification-service, frontend |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployment Status** | Completed |" >> $GITHUB_STEP_SUMMARY

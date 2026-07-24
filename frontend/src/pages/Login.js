@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { loginUser, getCustomerByUserId } from "../services/api";
+import { loginUser } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import Card from "../components/Card";
 
