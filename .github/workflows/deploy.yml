@@ -220,11 +220,18 @@ jobs:
               exit 1
             }
             
-            # Create deployment directory if it doesn't exist
+            # Setup deployment directory with proper permissions
             echo "Setting up deployment directory..."
-            DEPLOY_DIR="/opt/banking-management-system"
-            sudo mkdir -p "$DEPLOY_DIR"
-            sudo chown $USER:$USER "$DEPLOY_DIR"
+            DEPLOY_DIR="/home/ubuntu/banking-deployment"
+            mkdir -p "$DEPLOY_DIR"
+            
+            # Verify directory was created and is accessible
+            if [ ! -d "$DEPLOY_DIR" ]; then
+              echo "Error: Failed to create deployment directory"
+              exit 1
+            fi
+            
+            echo "Deployment directory ready: $DEPLOY_DIR"
             
             # Pull latest images
             echo "Pulling latest Docker images from ECR..."
@@ -251,7 +258,7 @@ version: '3.8'
 
 services:
   auth-service:
-    image: $ECR_REGISTRY/$ECR_REPOSITORY:auth-service-latest
+    image: REPLACE_REGISTRY/REPLACE_REPOSITORY:auth-service-latest
     container_name: auth-service
     ports:
       - "8001:8001"
@@ -267,7 +274,7 @@ services:
       retries: 3
 
   customer-service:
-    image: $ECR_REGISTRY/$ECR_REPOSITORY:customer-service-latest
+    image: REPLACE_REGISTRY/REPLACE_REPOSITORY:customer-service-latest
     container_name: customer-service
     ports:
       - "8002:8002"
@@ -283,7 +290,7 @@ services:
       retries: 3
 
   account-service:
-    image: $ECR_REGISTRY/$ECR_REPOSITORY:account-service-latest
+    image: REPLACE_REGISTRY/REPLACE_REPOSITORY:account-service-latest
     container_name: account-service
     ports:
       - "8003:8003"
@@ -299,7 +306,7 @@ services:
       retries: 3
 
   transaction-service:
-    image: $ECR_REGISTRY/$ECR_REPOSITORY:transaction-service-latest
+    image: REPLACE_REGISTRY/REPLACE_REPOSITORY:transaction-service-latest
     container_name: transaction-service
     ports:
       - "8004:8004"
@@ -315,7 +322,7 @@ services:
       retries: 3
 
   notification-service:
-    image: $ECR_REGISTRY/$ECR_REPOSITORY:notification-service-latest
+    image: REPLACE_REGISTRY/REPLACE_REPOSITORY:notification-service-latest
     container_name: notification-service
     ports:
       - "8005:8005"
@@ -331,7 +338,7 @@ services:
       retries: 3
 
   frontend:
-    image: $ECR_REGISTRY/$ECR_REPOSITORY:frontend-latest
+    image: REPLACE_REGISTRY/REPLACE_REPOSITORY:frontend-latest
     container_name: frontend
     ports:
       - "3000:3000"
@@ -350,33 +357,19 @@ networks:
 EOF
             fi
             
-            # Update docker-compose.yml with environment variables
+            # Update docker-compose.yml with new image tags
             echo "Updating docker-compose.yml with new image tags..."
             cd "$DEPLOY_DIR"
             
             # Backup original file
             cp docker-compose.yml docker-compose.yml.backup
             
-            # Create temporary file with environment variables substituted
-            ECR_REGISTRY="${REGISTRY}"
-            ECR_REPOSITORY="${REPOSITORY}"
+            # Replace placeholders with actual registry and repository
+            sed -i "s|REPLACE_REGISTRY|${{ env.ECR_REGISTRY }}|g" docker-compose.yml
+            sed -i "s|REPLACE_REPOSITORY|${{ env.ECR_REPOSITORY }}|g" docker-compose.yml
             
-            # Use envsubst if available, otherwise use sed
-            if command -v envsubst &> /dev/null; then
-              envsubst < docker-compose.yml.backup > docker-compose.yml.tmp
-              mv docker-compose.yml.tmp docker-compose.yml
-            else
-              sed -i "s|\$ECR_REGISTRY|$ECR_REGISTRY|g" docker-compose.yml
-              sed -i "s|\$ECR_REPOSITORY|$ECR_REPOSITORY|g" docker-compose.yml
-            fi
-            
-            # Also update with specific image tags
-            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:auth-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest|g" docker-compose.yml
-            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:customer-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest|g" docker-compose.yml
-            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:account-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest|g" docker-compose.yml
-            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:transaction-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest|g" docker-compose.yml
-            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:notification-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest|g" docker-compose.yml
-            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:frontend-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest|g" docker-compose.yml
+            echo "docker-compose.yml updated successfully"
+            cat docker-compose.yml | head -20
             
             # Start new containers
             echo "Starting new containers..."
