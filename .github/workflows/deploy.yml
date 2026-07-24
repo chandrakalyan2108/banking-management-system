@@ -7,13 +7,11 @@ on:
     branches: [ main ]
 
 env:
-  AWS_REGION: us-east-1
-  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+  AWS_REGION: ap-south-2
+  ECR_REGISTRY: 244718668444.dkr.ecr.ap-south-2.amazonaws.com
 
 jobs:
-  # 1 & 2: Developer pushes code to the GitHub repository (trigger above)
-
-  # 3: GitHub Actions CI - checkout, run unit tests, build docker images
+  # 1. CI - Maven Unit Tests & Docker Image Builds for Microservices
   build-and-test:
     runs-on: ubuntu-latest
     strategy:
@@ -43,6 +41,7 @@ jobs:
         working-directory: ./${{ matrix.service }}
         run: docker build -t ${{ matrix.service }}:${{ github.sha }} .
 
+  # 2. CI - Build & Test Frontend
   build-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -68,7 +67,7 @@ jobs:
         working-directory: ./frontend
         run: npm run build
 
-  # 4: Push Docker images to Amazon ECR
+  # 3. Push Docker Images to Amazon ECR (Region: ap-south-2)
   push-to-ecr:
     needs: [build-and-test, build-frontend]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -98,19 +97,19 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image
+      - name: Build, Tag, and Push Image to ECR
         working-directory: ./${{ matrix.service }}
         run: |
           docker build -t $ECR_REGISTRY/banking-${{ matrix.service }}:${{ github.sha }} -t $ECR_REGISTRY/banking-${{ matrix.service }}:latest .
           docker push $ECR_REGISTRY/banking-${{ matrix.service }}:${{ github.sha }}
           docker push $ECR_REGISTRY/banking-${{ matrix.service }}:latest
 
-  # 5: Deploy to EC2 via SSH (docker compose pull && docker compose up -d)
+  # 4. Deploy to EC2 via SSH
   deploy-to-ec2:
     needs: push-to-ecr
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to EC2 instance
+      - name: Deploy to EC2 Instance
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -118,17 +117,17 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd /home/${{ secrets.EC2_USERNAME }}/banking-management-system
-            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+            aws ecr get-login-password --region ap-south-2 | docker login --username AWS --password-stdin 244718668444.dkr.ecr.ap-south-2.amazonaws.com
             docker compose pull
             docker compose up -d
             docker image prune -f
 
-  # 6: Application live - health check confirmation against the ALB target group
+  # 5. Health Check Verification against Load Balancer Target Group
   verify-deployment:
     needs: deploy-to-ec2
     runs-on: ubuntu-latest
     steps:
-      - name: Health check
+      - name: Health Check
         run: |
           for i in {1..10}; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.ALB_DNS_NAME }}/health || echo "000")
