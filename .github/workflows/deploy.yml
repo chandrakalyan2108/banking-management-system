@@ -156,7 +156,7 @@ jobs:
           USER: ${{ secrets.EC2_USERNAME }}
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no $USER@$HOST \
-            "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R \$(whoami):\$(whoami) ${{ env.DEPLOY_DIR }}"
+            "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R $(whoami):$(whoami) ${{ env.DEPLOY_DIR }}"
 
       - name: Copy docker-compose.yml to EC2
         env:
@@ -194,6 +194,20 @@ jobs:
 
             echo "Starting deployment process..."
             export DEBIAN_FRONTEND=noninteractive
+
+            # Configure AWS credentials file
+            mkdir -p ~/.aws
+            cat > ~/.aws/credentials << EOF
+[default]
+aws_access_key_id = $AWS_ACCESS_KEY_ID
+aws_secret_access_key = $AWS_SECRET_ACCESS_KEY
+EOF
+            cat > ~/.aws/config << EOF
+[default]
+region = $AWS_REGION
+EOF
+            chmod 600 ~/.aws/credentials
+            chmod 600 ~/.aws/config
 
             # Install dependencies
             if command -v apt-get &> /dev/null; then
