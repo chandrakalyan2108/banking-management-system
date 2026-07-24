@@ -1,0 +1,176 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bank-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-bankdb}
+      POSTGRES_USER: ${DB_USER:-bankadmin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-bankpass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-bankadmin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bank-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: bank-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bank-network
+
+  auth-service:
+    build: ./auth-service
+    container_name: auth-service
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-bankdb}
+      DB_USER: ${DB_USER:-bankadmin}
+      DB_PASSWORD: ${DB_PASSWORD:-bankpass}
+      JWT_SECRET: ${JWT_SECRET:-banking-management-system-super-secret-key-change-in-production-2026}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    networks:
+      - bank-network
+
+  customer-service:
+    build: ./customer-service
+    container_name: customer-service
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-bankdb}
+      DB_USER: ${DB_USER:-bankadmin}
+      DB_PASSWORD: ${DB_PASSWORD:-bankpass}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8082:8082"
+    networks:
+      - bank-network
+
+  account-service:
+    build: ./account-service
+    container_name: account-service
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-bankdb}
+      DB_USER: ${DB_USER:-bankadmin}
+      DB_PASSWORD: ${DB_PASSWORD:-bankpass}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    networks:
+      - bank-network
+
+  transaction-service:
+    build: ./transaction-service
+    container_name: transaction-service
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-bankdb}
+      DB_USER: ${DB_USER:-bankadmin}
+      DB_PASSWORD: ${DB_PASSWORD:-bankpass}
+      ACCOUNT_SERVICE_URL: http://account-service:8083
+      NOTIFICATION_SERVICE_URL: http://notification-service:8085
+    depends_on:
+      postgres:
+        condition: service_healthy
+      account-service:
+        condition: service_started
+    ports:
+      - "8084:8084"
+    networks:
+      - bank-network
+
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-bankdb}
+      DB_USER: ${DB_USER:-bankadmin}
+      DB_PASSWORD: ${DB_PASSWORD:-bankpass}
+      MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8085:8085"
+    networks:
+      - bank-network
+
+  frontend:
+    build: ./frontend
+    container_name: bank-frontend
+    restart: unless-stopped
+    environment:
+      REACT_APP_API_BASE_URL: /api
+    ports:
+      - "3000:3000"
+    networks:
+      - bank-network
+
+  nginx:
+    build: ./nginx
+    container_name: bank-nginx
+    restart: unless-stopped
+    depends_on:
+      - auth-service
+      - customer-service
+      - account-service
+      - transaction-service
+      - notification-service
+      - frontend
+    ports:
+      - "80:80"
+    networks:
+      - bank-network
+
+networks:
+  bank-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

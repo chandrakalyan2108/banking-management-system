@@ -1,0 +1,143 @@
+name: Banking Management System CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  # 1 & 2: Developer pushes code to the GitHub repository (trigger above)
+
+  # 3: GitHub Actions CI - checkout, run unit tests, build docker images
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - customer-service
+          - account-service
+          - transaction-service
+          - notification-service
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run unit tests
+        working-directory: ./${{ matrix.service }}
+        run: mvn -B clean test
+
+      - name: Build Docker image
+        working-directory: ./${{ matrix.service }}
+        run: docker build -t ${{ matrix.service }}:${{ github.sha }} .
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run tests
+        working-directory: ./frontend
+        run: npm test -- --watchAll=false
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+
+  # 4: Push Docker images to Amazon ECR
+  push-to-ecr:
+    needs: [build-and-test, build-frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - customer-service
+          - account-service
+          - transaction-service
+          - notification-service
+          - frontend
+          - nginx
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image
+        working-directory: ./${{ matrix.service }}
+        run: |
+          docker build -t $ECR_REGISTRY/banking-${{ matrix.service }}:${{ github.sha }} -t $ECR_REGISTRY/banking-${{ matrix.service }}:latest .
+          docker push $ECR_REGISTRY/banking-${{ matrix.service }}:${{ github.sha }}
+          docker push $ECR_REGISTRY/banking-${{ matrix.service }}:latest
+
+  # 5: Deploy to EC2 via SSH (docker compose pull && docker compose up -d)
+  deploy-to-ec2:
+    needs: push-to-ecr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2 instance
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/${{ secrets.EC2_USERNAME }}/banking-management-system
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+            docker compose pull
+            docker compose up -d
+            docker image prune -f
+
+  # 6: Application live - health check confirmation against the ALB target group
+  verify-deployment:
+    needs: deploy-to-ec2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check
+        run: |
+          for i in {1..10}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.ALB_DNS_NAME }}/health || echo "000")
+            if [ "$STATUS" -eq 200 ]; then
+              echo "Application is live and healthy."
+              exit 0
+            fi
+            echo "Waiting for application to become healthy... ($i/10)"
+            sleep 10
+          done
+          echo "Health check failed after deployment."
+          exit 1
