@@ -26,6 +26,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -48,6 +51,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -66,6 +72,10 @@ jobs:
       - name: Build frontend
         working-directory: ./frontend
         run: npm run build
+
+      - name: Build frontend Docker image
+        working-directory: ./frontend
+        run: docker build -t frontend:${{ github.sha }} .
 
   # 3. Push Docker images to Amazon ECR
   push-to-ecr:
@@ -86,6 +96,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -100,9 +113,9 @@ jobs:
       - name: Build, tag, and push image
         working-directory: ./${{ matrix.service }}
         run: |
-          docker build -t $ECR_REGISTRY/banking-${{ matrix.service }}:${{ github.sha }} -t $ECR_REGISTRY/banking-${{ matrix.service }}:latest .
-          docker push $ECR_REGISTRY/banking-${{ matrix.service }}:${{ github.sha }}
-          docker push $ECR_REGISTRY/banking-${{ matrix.service }}:latest
+          docker build -t ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:latest .
+          docker push ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:latest
 
   # 4. Deploy to EC2 via SSH
   deploy-to-ec2:
@@ -117,7 +130,8 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd /home/${{ secrets.EC2_USERNAME }}/banking-management-system
-            aws ecr get-login-password --region ap-south-2 | docker login --username AWS --password-stdin 244718668444.dkr.ecr.ap-south-2.amazonaws.com
+            which aws || (sudo apt-get update && sudo apt-get install -y awscli)
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
             docker compose pull
             docker compose up -d
             docker image prune -f
