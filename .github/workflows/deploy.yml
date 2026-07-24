@@ -9,6 +9,7 @@ on:
 env:
   AWS_REGION: ap-south-2
   ECR_REGISTRY: 244718668444.dkr.ecr.ap-south-2.amazonaws.com
+  ECR_REPOSITORY: banking-management-system
 
 jobs:
   # 1. CI - Unit tests and Docker builds for backend microservices
@@ -112,5 +113,6 @@ jobs:
       - name: Build, tag, and push image
         working-directory: ./${{ matrix.service }}
         run: |
-          docker build -t ${{ env.ECR_REGISTRY }}/banking-${{ matrix.service }}:${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/banking-${{ matrix
-
+          docker build -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }} -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest .
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-${{ github.sha }}
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest
