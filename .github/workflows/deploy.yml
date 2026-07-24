@@ -220,6 +220,12 @@ jobs:
               exit 1
             }
             
+            # Create deployment directory if it doesn't exist
+            echo "Setting up deployment directory..."
+            DEPLOY_DIR="/opt/banking-management-system"
+            sudo mkdir -p "$DEPLOY_DIR"
+            sudo chown $USER:$USER "$DEPLOY_DIR"
+            
             # Pull latest images
             echo "Pulling latest Docker images from ECR..."
             docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest || true
@@ -231,29 +237,150 @@ jobs:
             
             # Stop existing containers
             echo "Stopping existing containers..."
-            if [ -f /opt/banking-management-system/docker-compose.yml ]; then
-              cd /opt/banking-management-system
+            if [ -f "$DEPLOY_DIR/docker-compose.yml" ]; then
+              cd "$DEPLOY_DIR"
               docker-compose down || true
             fi
             
-            # Update docker-compose.yml with new image tags
+            # Generate docker-compose.yml if it doesn't exist
+            echo "Preparing docker-compose configuration..."
+            if [ ! -f "$DEPLOY_DIR/docker-compose.yml" ]; then
+              echo "Creating docker-compose.yml template..."
+              cat > "$DEPLOY_DIR/docker-compose.yml" << 'EOF'
+version: '3.8'
+
+services:
+  auth-service:
+    image: $ECR_REGISTRY/$ECR_REPOSITORY:auth-service-latest
+    container_name: auth-service
+    ports:
+      - "8001:8001"
+    environment:
+      - SPRING_APPLICATION_NAME=auth-service
+    networks:
+      - banking-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  customer-service:
+    image: $ECR_REGISTRY/$ECR_REPOSITORY:customer-service-latest
+    container_name: customer-service
+    ports:
+      - "8002:8002"
+    environment:
+      - SPRING_APPLICATION_NAME=customer-service
+    networks:
+      - banking-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  account-service:
+    image: $ECR_REGISTRY/$ECR_REPOSITORY:account-service-latest
+    container_name: account-service
+    ports:
+      - "8003:8003"
+    environment:
+      - SPRING_APPLICATION_NAME=account-service
+    networks:
+      - banking-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  transaction-service:
+    image: $ECR_REGISTRY/$ECR_REPOSITORY:transaction-service-latest
+    container_name: transaction-service
+    ports:
+      - "8004:8004"
+    environment:
+      - SPRING_APPLICATION_NAME=transaction-service
+    networks:
+      - banking-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  notification-service:
+    image: $ECR_REGISTRY/$ECR_REPOSITORY:notification-service-latest
+    container_name: notification-service
+    ports:
+      - "8005:8005"
+    environment:
+      - SPRING_APPLICATION_NAME=notification-service
+    networks:
+      - banking-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    image: $ECR_REGISTRY/$ECR_REPOSITORY:frontend-latest
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    networks:
+      - banking-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  banking-network:
+    driver: bridge
+EOF
+            fi
+            
+            # Update docker-compose.yml with environment variables
             echo "Updating docker-compose.yml with new image tags..."
-            cd /opt/banking-management-system
+            cd "$DEPLOY_DIR"
             
             # Backup original file
             cp docker-compose.yml docker-compose.yml.backup
             
-            # Update image references
-            sed -i "s|image: .*auth-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*customer-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*account-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*transaction-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*notification-service:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest|g" docker-compose.yml
-            sed -i "s|image: .*frontend:.*|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest|g" docker-compose.yml
+            # Create temporary file with environment variables substituted
+            ECR_REGISTRY="${REGISTRY}"
+            ECR_REPOSITORY="${REPOSITORY}"
+            
+            # Use envsubst if available, otherwise use sed
+            if command -v envsubst &> /dev/null; then
+              envsubst < docker-compose.yml.backup > docker-compose.yml.tmp
+              mv docker-compose.yml.tmp docker-compose.yml
+            else
+              sed -i "s|\$ECR_REGISTRY|$ECR_REGISTRY|g" docker-compose.yml
+              sed -i "s|\$ECR_REPOSITORY|$ECR_REPOSITORY|g" docker-compose.yml
+            fi
+            
+            # Also update with specific image tags
+            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:auth-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:auth-service-latest|g" docker-compose.yml
+            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:customer-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:customer-service-latest|g" docker-compose.yml
+            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:account-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:account-service-latest|g" docker-compose.yml
+            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:transaction-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:transaction-service-latest|g" docker-compose.yml
+            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:notification-service-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:notification-service-latest|g" docker-compose.yml
+            sed -i "s|image: $ECR_REGISTRY/$ECR_REPOSITORY:frontend-latest|image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:frontend-latest|g" docker-compose.yml
             
             # Start new containers
             echo "Starting new containers..."
-            docker-compose -f /opt/banking-management-system/docker-compose.yml up -d
+            docker-compose -f "$DEPLOY_DIR/docker-compose.yml" up -d
             
             echo "Deployment completed successfully"
           DEPLOY_SCRIPT
