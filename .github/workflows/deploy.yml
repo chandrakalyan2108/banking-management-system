@@ -163,6 +163,14 @@ jobs:
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             docker-compose.yml "$USER@$HOST:${{ env.DEPLOY_DIR }}/docker-compose.yml"
 
+      - name: Copy nginx config to EC2
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USERNAME }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r \
+            nginx "$USER@$HOST:${{ env.DEPLOY_DIR }}/nginx"
+
       - name: Copy .env file to EC2
         env:
           HOST: ${{ secrets.EC2_HOST }}
