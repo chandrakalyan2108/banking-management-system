@@ -82,8 +82,6 @@ jobs:
         run: docker build -t frontend:${{ github.sha }} .
 
   # 3. Push Docker images to Amazon ECR
-  # This job runs entirely on the GitHub-hosted runner, so using static
-  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY secrets here is fine.
   push-to-ecr:
     needs: [build-and-test, build-frontend]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -123,20 +121,14 @@ jobs:
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.service }}-latest
 
   # 4. Deploy to EC2
-  # The deploy/verify logic lives in scripts/deploy-remote.sh and
-  # scripts/verify-remote.sh (checked into the repo). They're copied to the
-  # server via scp and executed directly -- no heredocs embedded in this
-  # YAML file, which avoids the bash-vs-YAML indentation conflict entirely.
-  # Auth to ECR happens ON THE EC2 BOX using its attached IAM instance role
-  # (AmazonEC2ContainerRegistryReadOnly). No AWS keys are sent over SSH.
+  # Instead of scp-ing individual files (docker-compose.yml, nginx/, scripts/
+  # one at a time -- which is easy to forget one of), the EC2 instance does a
+  # git clone/pull of the ENTIRE repo. Every file always arrives together.
   deploy-to-ec2:
     needs: push-to-ecr
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Set up SSH key
         env:
           PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
@@ -155,13 +147,23 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
             "sudo mkdir -p ${{ env.DEPLOY_DIR }} && sudo chown -R \$(whoami):\$(whoami) ${{ env.DEPLOY_DIR }}"
 
-      - name: Copy docker-compose.yml to EC2
+      - name: Sync repository to EC2
         env:
           HOST: ${{ secrets.EC2_HOST }}
           USER: ${{ secrets.EC2_USERNAME }}
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            docker-compose.yml "$USER@$HOST:${{ env.DEPLOY_DIR }}/docker-compose.yml"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
+            "REPO_URL='$REPO_URL' DEPLOY_DIR='$DEPLOY_DIR' bash -c '
+              if [ -d \"\$DEPLOY_DIR/.git\" ]; then
+                cd \"\$DEPLOY_DIR\" && git fetch origin main && git reset --hard origin/main && git clean -fd
+              else
+                git clone --branch main \"\$REPO_URL\" \"\$DEPLOY_DIR\"
+              fi
+            '"
 
       - name: Copy .env file to EC2
         env:
@@ -172,16 +174,8 @@ jobs:
             scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
               .env "$USER@$HOST:${{ env.DEPLOY_DIR }}/.env"
           else
-            echo "Warning: .env file not found in repository"
+            echo "Warning: .env file not found locally in this workflow checkout. Skipping -- make sure one already exists on the server from a previous run, or add it manually."
           fi
-
-      - name: Copy deploy script to EC2
-        env:
-          HOST: ${{ secrets.EC2_HOST }}
-          USER: ${{ secrets.EC2_USERNAME }}
-        run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            scripts/deploy-remote.sh "$USER@$HOST:${{ env.DEPLOY_DIR }}/deploy-remote.sh"
 
       - name: Run deploy script on EC2
         env:
@@ -193,17 +187,17 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
-            "chmod +x '$DEPLOY_DIR/deploy-remote.sh' && AWS_REGION='$AWS_REGION' REGISTRY='$REGISTRY' REPOSITORY='$REPOSITORY' DEPLOY_DIR='$DEPLOY_DIR' bash '$DEPLOY_DIR/deploy-remote.sh'"
+            "chmod +x '$DEPLOY_DIR/scripts/deploy-remote.sh' && AWS_REGION='$AWS_REGION' REGISTRY='$REGISTRY' REPOSITORY='$REPOSITORY' DEPLOY_DIR='$DEPLOY_DIR' bash '$DEPLOY_DIR/scripts/deploy-remote.sh'"
 
   # 5. Verify Deployment
+  # The repo (including scripts/verify-remote.sh) is already on the server
+  # from the sync step above, so this job just runs it directly -- no
+  # separate copy step needed.
   verify-deployment:
     needs: deploy-to-ec2
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Set up SSH key
         env:
           PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
@@ -214,21 +208,14 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Copy verify script to EC2
-        env:
-          HOST: ${{ secrets.EC2_HOST }}
-          USER: ${{ secrets.EC2_USERNAME }}
-        run: |
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            scripts/verify-remote.sh "$USER@$HOST:${{ env.DEPLOY_DIR }}/verify-remote.sh"
-
       - name: Run verify script on EC2
         env:
           HOST: ${{ secrets.EC2_HOST }}
           USER: ${{ secrets.EC2_USERNAME }}
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "$USER@$HOST" \
-            "chmod +x '${{ env.DEPLOY_DIR }}/verify-remote.sh' && bash '${{ env.DEPLOY_DIR }}/verify-remote.sh'"
+            "chmod +x '$DEPLOY_DIR/scripts/verify-remote.sh' && bash '$DEPLOY_DIR/scripts/verify-remote.sh'"
 
       - name: Generate deployment summary
         if: always()
