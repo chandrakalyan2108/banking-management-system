@@ -38,7 +38,7 @@ services:
       - bank-network
 
   auth-service:
-    build: ./auth-service
+    image: PLACEHOLDER/PLACEHOLDER:auth-service-latest
     container_name: auth-service
     restart: unless-stopped
     environment:
@@ -57,7 +57,7 @@ services:
       - bank-network
 
   customer-service:
-    build: ./customer-service
+    image: PLACEHOLDER/PLACEHOLDER:customer-service-latest
     container_name: customer-service
     restart: unless-stopped
     environment:
@@ -75,7 +75,7 @@ services:
       - bank-network
 
   account-service:
-    build: ./account-service
+    image: PLACEHOLDER/PLACEHOLDER:account-service-latest
     container_name: account-service
     restart: unless-stopped
     environment:
@@ -97,7 +97,7 @@ services:
       - bank-network
 
   transaction-service:
-    build: ./transaction-service
+    image: PLACEHOLDER/PLACEHOLDER:transaction-service-latest
     container_name: transaction-service
     restart: unless-stopped
     environment:
@@ -119,7 +119,7 @@ services:
       - bank-network
 
   notification-service:
-    build: ./notification-service
+    image: PLACEHOLDER/PLACEHOLDER:notification-service-latest
     container_name: notification-service
     restart: unless-stopped
     environment:
@@ -141,7 +141,7 @@ services:
       - bank-network
 
   frontend:
-    build: ./frontend
+    image: PLACEHOLDER/PLACEHOLDER:frontend-latest
     container_name: bank-frontend
     restart: unless-stopped
     environment:
