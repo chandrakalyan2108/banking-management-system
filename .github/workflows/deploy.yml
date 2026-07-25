@@ -161,6 +161,7 @@ jobs:
               if [ -d \"\$DEPLOY_DIR/.git\" ]; then
                 cd \"\$DEPLOY_DIR\" && git fetch origin main && git reset --hard origin/main && git clean -fd
               else
+                rm -rf \"\$DEPLOY_DIR\"/* \"\$DEPLOY_DIR\"/.[!.]* 2>/dev/null || true
                 git clone --branch main \"\$REPO_URL\" \"\$DEPLOY_DIR\"
               fi
             '"
