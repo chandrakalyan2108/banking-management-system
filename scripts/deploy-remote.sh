@@ -52,12 +52,13 @@ docker compose down || true
 cp docker-compose.yml docker-compose.yml.backup
 
 echo "Updating docker-compose.yml with new image tags..."
-sed -i "s|image: .*auth-service:.*|image: $REGISTRY/$REPOSITORY:auth-service-latest|g" docker-compose.yml
-sed -i "s|image: .*customer-service:.*|image: $REGISTRY/$REPOSITORY:customer-service-latest|g" docker-compose.yml
-sed -i "s|image: .*account-service:.*|image: $REGISTRY/$REPOSITORY:account-service-latest|g" docker-compose.yml
-sed -i "s|image: .*transaction-service:.*|image: $REGISTRY/$REPOSITORY:transaction-service-latest|g" docker-compose.yml
-sed -i "s|image: .*notification-service:.*|image: $REGISTRY/$REPOSITORY:notification-service-latest|g" docker-compose.yml
-sed -i "s|image: .*frontend:.*|image: $REGISTRY/$REPOSITORY:frontend-latest|g" docker-compose.yml
+
+# The compose file ships with "image: PLACEHOLDER/PLACEHOLDER:<service>-latest"
+# lines. Only the registry/repo prefix needs replacing -- the "-latest" tag
+# suffix is already correct in the file. Matching on a literal
+# "<service>:" (colon right after the name) never worked, because the tag
+# separator uses a hyphen ("-latest"), not a colon, after the service name.
+sed -i "s|PLACEHOLDER/PLACEHOLDER|$REGISTRY/$REPOSITORY|g" docker-compose.yml
 
 if [ -f "$DEPLOY_DIR/.env" ]; then
   echo "Loading environment variables from .env..."
