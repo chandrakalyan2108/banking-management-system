@@ -26,11 +26,21 @@ public class TransactionService {
     public Transaction transfer(TransferRequest request) {
         String refId = "TXN" + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
 
+        Long toAccountId = accountServiceClient.resolveAccountIdByNumber(request.getToAccountNumber());
+        if (toAccountId == null) {
+            throw new TransactionFailedException(
+                    "No account found with number: " + request.getToAccountNumber());
+        }
+
+        if (toAccountId.equals(request.getFromAccountId())) {
+            throw new TransactionFailedException("Cannot transfer to the same account.");
+        }
+
         Transaction transaction = Transaction.builder()
                 .referenceId(refId)
                 .type("TRANSFER")
                 .fromAccountId(request.getFromAccountId())
-                .toAccountId(request.getToAccountId())
+                .toAccountId(toAccountId)
                 .amount(request.getAmount())
                 .status("PENDING")
                 .remarks(request.getRemarks())
@@ -44,7 +54,7 @@ public class TransactionService {
             throw new TransactionFailedException("Withdrawal failed - insufficient funds or invalid account");
         }
 
-        boolean deposited = accountServiceClient.deposit(request.getToAccountId(), request.getAmount());
+        boolean deposited = accountServiceClient.deposit(toAccountId, request.getAmount());
         if (!deposited) {
             // compensating transaction: refund the source account
             accountServiceClient.deposit(request.getFromAccountId(), request.getAmount());
