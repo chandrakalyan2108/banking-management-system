@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
@@ -24,6 +25,23 @@ public class AccountServiceClient {
 
     public JsonNode getAccount(Long accountId) {
         return restTemplate.getForObject(accountServiceUrl + "/api/accounts/" + accountId, JsonNode.class);
+    }
+
+    /**
+     * Resolves a customer-visible account number (e.g. "AC7518998885") to its
+     * internal database ID. Returns null if no account with that number exists.
+     */
+    public Long resolveAccountIdByNumber(String accountNumber) {
+        try {
+            JsonNode account = restTemplate.getForObject(
+                    accountServiceUrl + "/api/accounts/number/" + accountNumber, JsonNode.class);
+            if (account != null && account.has("id")) {
+                return account.get("id").asLong();
+            }
+            return null;
+        } catch (HttpClientErrorException.NotFound e) {
+            return null;
+        }
     }
 
     public boolean deposit(Long accountId, BigDecimal amount) {
