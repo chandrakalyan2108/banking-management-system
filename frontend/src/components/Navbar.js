@@ -21,6 +21,9 @@ export default function Navbar() {
             <Link to="/accounts" style={styles.link}>Accounts</Link>
             <Link to="/transfer" style={styles.link}>Transfer</Link>
             <Link to="/transactions" style={styles.link}>History</Link>
+            {user.role === "ADMIN" && (
+              <Link to="/admin" style={{ ...styles.link, color: "#fbbf24", fontWeight: 700 }}>Admin</Link>
+            )}
             <button onClick={handleLogout} style={styles.logoutBtn}>Logout</button>
           </>
         ) : (
