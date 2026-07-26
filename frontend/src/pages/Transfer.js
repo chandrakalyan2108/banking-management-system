@@ -6,7 +6,7 @@ import Card from "../components/Card";
 export default function Transfer() {
   const { user } = useAuth();
   const [accounts, setAccounts] = useState([]);
-  const [form, setForm] = useState({ fromAccountId: "", toAccountId: "", amount: "", remarks: "" });
+  const [form, setForm] = useState({ fromAccountId: "", toAccountNumber: "", amount: "", remarks: "" });
   const [message, setMessage] = useState("");
   const [success, setSuccess] = useState(false);
 
@@ -25,13 +25,13 @@ export default function Transfer() {
     try {
       const res = await transferFunds({
         fromAccountId: parseInt(form.fromAccountId),
-        toAccountId: parseInt(form.toAccountId),
+        toAccountNumber: form.toAccountNumber.trim(),
         amount: parseFloat(form.amount),
         remarks: form.remarks,
       });
       setSuccess(true);
       setMessage(`Transfer successful. Reference: ${res.data.referenceId}`);
-      setForm({ fromAccountId: "", toAccountId: "", amount: "", remarks: "" });
+      setForm({ fromAccountId: "", toAccountNumber: "", amount: "", remarks: "" });
     } catch (err) {
       setSuccess(false);
       setMessage(err.response?.data?.error || "Transfer failed.");
@@ -55,9 +55,9 @@ export default function Transfer() {
             ))}
           </select>
 
-          <label style={styles.label}>To Account ID</label>
-          <input style={styles.input} placeholder="Recipient account ID" value={form.toAccountId}
-            onChange={(e) => setForm({ ...form, toAccountId: e.target.value })} required />
+          <label style={styles.label}>To Account Number</label>
+          <input style={styles.input} placeholder="e.g. AC7518998885" value={form.toAccountNumber}
+            onChange={(e) => setForm({ ...form, toAccountNumber: e.target.value })} required />
 
           <label style={styles.label}>Amount</label>
           <input style={styles.input} type="number" step="0.01" placeholder="0.00" value={form.amount}
