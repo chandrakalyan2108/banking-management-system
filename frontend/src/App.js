@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import PrivateRoute from "./components/PrivateRoute";
+import AdminRoute from "./components/AdminRoute";
 import Navbar from "./components/Navbar";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -9,6 +10,7 @@ import Dashboard from "./pages/Dashboard";
 import Accounts from "./pages/Accounts";
 import Transfer from "./pages/Transfer";
 import Transactions from "./pages/Transactions";
+import AdminDashboard from "./pages/AdminDashboard";
 
 function App() {
   return (
@@ -23,6 +25,7 @@ function App() {
           <Route path="/accounts" element={<PrivateRoute><Accounts /></PrivateRoute>} />
           <Route path="/transfer" element={<PrivateRoute><Transfer /></PrivateRoute>} />
           <Route path="/transactions" element={<PrivateRoute><Transactions /></PrivateRoute>} />
+          <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
