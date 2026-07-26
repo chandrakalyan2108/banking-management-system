@@ -13,7 +13,7 @@ export default function Navbar() {
 
   return (
     <nav style={styles.nav}>
-      <Link to="/" style={styles.brand}>🏦 Banking Management System</Link>
+      <Link to="/" style={styles.brand}>🏦 MIM Bank</Link>
       <div style={styles.links}>
         {user ? (
           <>
