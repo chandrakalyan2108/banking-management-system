@@ -1,6 +1,7 @@
 package com.bank.transaction.dto;
 
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import java.math.BigDecimal;
@@ -9,8 +10,8 @@ import java.math.BigDecimal;
 public class TransferRequest {
     @NotNull
     private Long fromAccountId;
-    @NotNull
-    private Long toAccountId;
+    @NotBlank
+    private String toAccountNumber;
     @NotNull @DecimalMin(value = "0.01")
     private BigDecimal amount;
     private String remarks;
