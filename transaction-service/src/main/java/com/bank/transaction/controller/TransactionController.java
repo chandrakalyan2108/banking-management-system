@@ -28,13 +28,17 @@ public class TransactionController {
     }
 
     @PostMapping("/deposit/{accountId}")
-    public ResponseEntity<Transaction> deposit(@PathVariable Long accountId, @RequestBody Map<String, BigDecimal> body) {
-        return ResponseEntity.ok(transactionService.recordDeposit(accountId, body.get("amount")));
+    public ResponseEntity<Transaction> deposit(@PathVariable Long accountId, @RequestBody Map<String, Object> body) {
+        BigDecimal amount = new BigDecimal(body.get("amount").toString());
+        String remarks = body.getOrDefault("remarks", "").toString();
+        return ResponseEntity.ok(transactionService.recordDeposit(accountId, amount, remarks));
     }
 
     @PostMapping("/withdrawal/{accountId}")
-    public ResponseEntity<Transaction> withdrawal(@PathVariable Long accountId, @RequestBody Map<String, BigDecimal> body) {
-        return ResponseEntity.ok(transactionService.recordWithdrawal(accountId, body.get("amount")));
+    public ResponseEntity<Transaction> withdrawal(@PathVariable Long accountId, @RequestBody Map<String, Object> body) {
+        BigDecimal amount = new BigDecimal(body.get("amount").toString());
+        String remarks = body.getOrDefault("remarks", "").toString();
+        return ResponseEntity.ok(transactionService.recordWithdrawal(accountId, amount, remarks));
     }
 
     @GetMapping("/account/{accountId}")
