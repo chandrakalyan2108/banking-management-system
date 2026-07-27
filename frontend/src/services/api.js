@@ -26,10 +26,18 @@ export const updateKycStatus = (customerId, status) => api.patch(`/customers/${c
 export const openAccount = (data) => api.post("/accounts", data);
 export const getAccountsByCustomer = (customerId) => api.get(`/accounts/customer/${customerId}`);
 export const getAccountById = (id) => api.get(`/accounts/${id}`);
-export const depositToAccount = (id, amount) => api.post(`/accounts/${id}/deposit`, { amount });
-export const withdrawFromAccount = (id, amount) => api.post(`/accounts/${id}/withdraw`, { amount });
 export const getAllAccounts = () => api.get("/accounts");
 export const closeAccount = (id) => api.patch(`/accounts/${id}/close`);
+export const approveAccount = (id) => api.patch(`/accounts/${id}/approve`);
+
+// ---- Deposits & Withdrawals ----
+// Routed through transaction-service (not account-service directly) so that
+// every deposit/withdrawal is recorded in Transaction History, the same way
+// transfers already are.
+export const depositToAccount = (id, amount, remarks = "") =>
+  api.post(`/transactions/deposit/${id}`, { amount, remarks });
+export const withdrawFromAccount = (id, amount, remarks = "") =>
+  api.post(`/transactions/withdrawal/${id}`, { amount, remarks });
 
 // ---- Transactions ----
 export const transferFunds = (data) => api.post("/transactions/transfer", data);
