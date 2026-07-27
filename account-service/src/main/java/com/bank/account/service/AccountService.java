@@ -1,6 +1,7 @@
 package com.bank.account.service;
 
 import com.bank.account.dto.OpenAccountRequest;
+import com.bank.account.exception.AccountNotActiveException;
 import com.bank.account.exception.AccountNotFoundException;
 import com.bank.account.exception.InsufficientFundsException;
 import com.bank.account.model.Account;
@@ -24,13 +25,16 @@ public class AccountService {
 
     @Transactional
     public Account openAccount(OpenAccountRequest request) {
+        // New accounts start PENDING and must be approved by an admin before
+        // any deposit, withdrawal, or transfer can happen on them. This is
+        // an account APPLICATION, not an instantly-usable account.
         Account account = Account.builder()
                 .accountNumber(generateAccountNumber())
                 .customerId(request.getCustomerId())
                 .accountType(request.getAccountType() != null ? request.getAccountType() : "SAVINGS")
                 .balance(request.getInitialDeposit() != null ? request.getInitialDeposit() : BigDecimal.ZERO)
                 .currency(request.getCurrency() != null ? request.getCurrency() : "USD")
-                .status("ACTIVE")
+                .status("PENDING")
                 .build();
         return accountRepository.save(account);
     }
@@ -56,8 +60,17 @@ public class AccountService {
 
     @Transactional
     @CacheEvict(value = "accounts", key = "#id")
+    public Account approveAccount(Long id) {
+        Account account = getAccountByIdForUpdate(id);
+        account.setStatus("ACTIVE");
+        return accountRepository.save(account);
+    }
+
+    @Transactional
+    @CacheEvict(value = "accounts", key = "#id")
     public Account deposit(Long id, BigDecimal amount) {
         Account account = getAccountByIdForUpdate(id);
+        requireActive(account);
         account.setBalance(account.getBalance().add(amount));
         return accountRepository.save(account);
     }
@@ -66,11 +79,20 @@ public class AccountService {
     @CacheEvict(value = "accounts", key = "#id")
     public Account withdraw(Long id, BigDecimal amount) {
         Account account = getAccountByIdForUpdate(id);
+        requireActive(account);
         if (account.getBalance().compareTo(amount) < 0) {
             throw new InsufficientFundsException("Insufficient funds in account: " + account.getAccountNumber());
         }
         account.setBalance(account.getBalance().subtract(amount));
         return accountRepository.save(account);
+    }
+
+    private void requireActive(Account account) {
+        if (!"ACTIVE".equals(account.getStatus())) {
+            throw new AccountNotActiveException(
+                    "Account " + account.getAccountNumber() + " is " + account.getStatus()
+                            + " and cannot be used for transactions until an admin approves it.");
+        }
     }
 
     private Account getAccountByIdForUpdate(Long id) {
