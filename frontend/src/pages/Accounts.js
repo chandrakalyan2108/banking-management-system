@@ -128,61 +128,69 @@ export default function Accounts() {
     <div style={{ padding: "32px", maxWidth: "1100px", margin: "0 auto" }}>
       <h1>My Accounts</h1>
 
-      <Card style={{ maxWidth: "560px", marginTop: "20px" }}>
-        <h3>Apply for a Bank Account</h3>
-        <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginTop: "6px" }}>
-          Your application will be reviewed by an admin. Deposits are handled by the bank directly.
-        </p>
-        {message && <p style={{ color: "#0d9488", marginTop: "8px", fontWeight: 500 }}>{message}</p>}
+      {accounts.length === 0 ? (
+        <Card style={{ maxWidth: "560px", marginTop: "20px" }}>
+          <h3>Apply for a Bank Account</h3>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginTop: "6px" }}>
+            Your application will be reviewed by an admin. Deposits are handled by the bank directly.
+          </p>
+          {message && <p style={{ color: "#0d9488", marginTop: "8px", fontWeight: 500 }}>{message}</p>}
 
-        <form onSubmit={handleOpenAccount} style={{ marginTop: "12px" }}>
-          <div style={styles.row}>
-            <div style={{ flex: 1 }}>
-              <input style={styles.input} placeholder="First Name" value={form.firstName}
-                onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
-              {errors.firstName && <p style={styles.err}>{errors.firstName}</p>}
+          <form onSubmit={handleOpenAccount} style={{ marginTop: "12px" }}>
+            <div style={styles.row}>
+              <div style={{ flex: 1 }}>
+                <input style={styles.input} placeholder="First Name" value={form.firstName}
+                  onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
+                {errors.firstName && <p style={styles.err}>{errors.firstName}</p>}
+              </div>
+              <div style={{ flex: 1 }}>
+                <input style={styles.input} placeholder="Last Name" value={form.lastName}
+                  onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
+                {errors.lastName && <p style={styles.err}>{errors.lastName}</p>}
+              </div>
             </div>
-            <div style={{ flex: 1 }}>
-              <input style={styles.input} placeholder="Last Name" value={form.lastName}
-                onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
-              {errors.lastName && <p style={styles.err}>{errors.lastName}</p>}
-            </div>
-          </div>
 
-          <label style={styles.label}>Date of Birth</label>
-          <input style={styles.input} type="date" value={form.dateOfBirth}
-            onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} />
-          {errors.dateOfBirth && <p style={styles.err}>{errors.dateOfBirth}</p>}
+            <label style={styles.label}>Date of Birth</label>
+            <input style={styles.input} type="date" value={form.dateOfBirth}
+              onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} />
+            {errors.dateOfBirth && <p style={styles.err}>{errors.dateOfBirth}</p>}
 
-          <label style={styles.label}>Aadhaar Number</label>
-          <input style={styles.input} placeholder="12-digit Aadhaar number" maxLength={12} value={form.aadharNumber}
-            onChange={(e) => setForm({ ...form, aadharNumber: e.target.value.replace(/\D/g, "") })} />
-          {errors.aadharNumber && <p style={styles.err}>{errors.aadharNumber}</p>}
+            <label style={styles.label}>Aadhaar Number</label>
+            <input style={styles.input} placeholder="12-digit Aadhaar number" maxLength={12} value={form.aadharNumber}
+              onChange={(e) => setForm({ ...form, aadharNumber: e.target.value.replace(/\D/g, "") })} />
+            {errors.aadharNumber && <p style={styles.err}>{errors.aadharNumber}</p>}
 
-          <label style={styles.label}>PAN Number</label>
-          <input style={styles.input} placeholder="ABCDE1234F" maxLength={10}
-            value={form.panNumber}
-            onChange={(e) => setForm({ ...form, panNumber: e.target.value.toUpperCase() })} />
-          {errors.panNumber && <p style={styles.err}>{errors.panNumber}</p>}
+            <label style={styles.label}>PAN Number</label>
+            <input style={styles.input} placeholder="ABCDE1234F" maxLength={10}
+              value={form.panNumber}
+              onChange={(e) => setForm({ ...form, panNumber: e.target.value.toUpperCase() })} />
+            {errors.panNumber && <p style={styles.err}>{errors.panNumber}</p>}
 
-          <label style={styles.label}>Place</label>
-          <input style={styles.input} placeholder="City / Town" value={form.place}
-            onChange={(e) => setForm({ ...form, place: e.target.value })} />
-          {errors.place && <p style={styles.err}>{errors.place}</p>}
+            <label style={styles.label}>Place</label>
+            <input style={styles.input} placeholder="City / Town" value={form.place}
+              onChange={(e) => setForm({ ...form, place: e.target.value })} />
+            {errors.place && <p style={styles.err}>{errors.place}</p>}
 
-          <label style={styles.label}>Account Type</label>
-          <select style={styles.input} value={form.accountType}
-            onChange={(e) => setForm({ ...form, accountType: e.target.value })}>
-            <option value="SAVINGS">Savings</option>
-            <option value="CURRENT">Current</option>
-          </select>
+            <label style={styles.label}>Account Type</label>
+            <select style={styles.input} value={form.accountType}
+              onChange={(e) => setForm({ ...form, accountType: e.target.value })}>
+              <option value="SAVINGS">Savings</option>
+              <option value="CURRENT">Current</option>
+            </select>
 
-          <input style={styles.input} type="number" step="0.01" placeholder="Initial Deposit (optional, ₹)"
-            value={form.initialDeposit} onChange={(e) => setForm({ ...form, initialDeposit: e.target.value })} />
+            <input style={styles.input} type="number" step="0.01" placeholder="Initial Deposit (optional, ₹)"
+              value={form.initialDeposit} onChange={(e) => setForm({ ...form, initialDeposit: e.target.value })} />
 
-          <button style={styles.btn}>Submit Application</button>
-        </form>
-      </Card>
+            <button style={styles.btn}>Submit Application</button>
+          </form>
+        </Card>
+      ) : (
+        message && (
+          <Card style={{ maxWidth: "560px", marginTop: "20px" }}>
+            <p style={{ color: "#0d9488", fontWeight: 500 }}>{message}</p>
+          </Card>
+        )
+      )}
 
       <div style={{ marginTop: "28px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "16px" }}>
         {accounts.map((acc) => {
