@@ -5,16 +5,29 @@ import Card from "../components/Card";
 
 const mask = (num) => (num ? "•••• " + num.slice(-4) : "");
 
+const emptyForm = {
+  accountType: "SAVINGS",
+  initialDeposit: "",
+  firstName: "",
+  lastName: "",
+  dateOfBirth: "",
+  aadharNumber: "",
+  panNumber: "",
+  place: "",
+};
+
 export default function Accounts() {
   const { user } = useAuth();
   const [customerId, setCustomerId] = useState(null);
   const [accounts, setAccounts] = useState([]);
-  const [accountType, setAccountType] = useState("SAVINGS");
-  const [initialDeposit, setInitialDeposit] = useState("");
+  const [form, setForm] = useState(emptyForm);
   const [amounts, setAmounts] = useState({});
   const [confirming, setConfirming] = useState(null);
   const [processing, setProcessing] = useState(null);
   const [message, setMessage] = useState("");
+  const [errors, setErrors] = useState({});
+
+  const isAdmin = user?.role === "ADMIN";
 
   const loadAccounts = async (custId) => {
     const res = await getAccountsByCustomer(custId);
@@ -23,18 +36,43 @@ export default function Accounts() {
 
   useEffect(() => {
     const init = async () => {
+      if (isAdmin) return; // Admins don't apply for or hold a personal account here
       const custRes = await getCustomerByUserId(user.userId);
       setCustomerId(custRes.data.id);
       await loadAccounts(custRes.data.id);
     };
     if (user) init();
-  }, [user]);
+  }, [user, isAdmin]);
+
+  const validate = () => {
+    const errs = {};
+    if (!form.firstName.trim()) errs.firstName = "Required";
+    if (!form.lastName.trim()) errs.lastName = "Required";
+    if (!form.dateOfBirth) errs.dateOfBirth = "Required";
+    if (!/^\d{12}$/.test(form.aadharNumber)) errs.aadharNumber = "Must be exactly 12 digits";
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(form.panNumber.toUpperCase())) errs.panNumber = "Format: ABCDE1234F";
+    if (!form.place.trim()) errs.place = "Required";
+    setErrors(errs);
+    return Object.keys(errs).length === 0;
+  };
 
   const handleOpenAccount = async (e) => {
     e.preventDefault();
+    setMessage("");
+    if (!validate()) return;
     try {
-      await openAccount({ customerId, accountType, initialDeposit: parseFloat(initialDeposit) || 0 });
-      setInitialDeposit("");
+      await openAccount({
+        customerId,
+        accountType: form.accountType,
+        initialDeposit: parseFloat(form.initialDeposit) || 0,
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        dateOfBirth: form.dateOfBirth,
+        aadharNumber: form.aadharNumber,
+        panNumber: form.panNumber.toUpperCase(),
+        place: form.place.trim(),
+      });
+      setForm(emptyForm);
       setMessage("Application submitted. Your account will be usable once an admin approves it.");
       await loadAccounts(customerId);
     } catch (err) {
@@ -52,14 +90,11 @@ export default function Accounts() {
     const amount = parseFloat(amounts[id]);
     setConfirming(null);
     setProcessing(id);
-    // Simulated processing delay -- real banks rarely settle a withdrawal
-    // instantly; this brief pause plus a receipt-style confirmation makes
-    // the flow feel like an actual transaction rather than a toggle switch.
     await new Promise((resolve) => setTimeout(resolve, 1200));
     try {
       const res = await withdrawFromAccount(id, amount);
       setAmounts({ ...amounts, [id]: "" });
-      setMessage(`Withdrawal successful. Ref: ${res.data.referenceId}. New balance updated below.`);
+      setMessage(`Withdrawal successful. Ref: ${res.data.referenceId}.`);
       await loadAccounts(customerId);
     } catch (err) {
       setMessage(err.response?.data?.error || "Withdrawal failed.");
@@ -74,24 +109,77 @@ export default function Accounts() {
     return { background: "var(--danger-bg)", color: "var(--danger-text)" };
   };
 
+  if (isAdmin) {
+    return (
+      <div style={{ padding: "32px", maxWidth: "700px", margin: "0 auto" }}>
+        <h1>Accounts</h1>
+        <Card style={{ marginTop: "20px" }}>
+          <p style={{ color: "var(--text-secondary)" }}>
+            Admins don't apply for or hold a personal account through this page — every
+            account operation (approving applications, deposits, KYC review) is handled
+            directly from the <strong>Admin Dashboard</strong>.
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: "32px", maxWidth: "1100px", margin: "0 auto" }}>
       <h1>My Accounts</h1>
 
-      <Card style={{ maxWidth: "480px", marginTop: "20px" }}>
+      <Card style={{ maxWidth: "560px", marginTop: "20px" }}>
         <h3>Apply for a Bank Account</h3>
         <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginTop: "6px" }}>
-          Your application will be reviewed by an admin. You won't be able to withdraw
-          or transfer until it's approved. Deposits are handled by the bank directly.
+          Your application will be reviewed by an admin. Deposits are handled by the bank directly.
         </p>
         {message && <p style={{ color: "#0d9488", marginTop: "8px", fontWeight: 500 }}>{message}</p>}
+
         <form onSubmit={handleOpenAccount} style={{ marginTop: "12px" }}>
-          <select style={styles.input} value={accountType} onChange={(e) => setAccountType(e.target.value)}>
+          <div style={styles.row}>
+            <div style={{ flex: 1 }}>
+              <input style={styles.input} placeholder="First Name" value={form.firstName}
+                onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
+              {errors.firstName && <p style={styles.err}>{errors.firstName}</p>}
+            </div>
+            <div style={{ flex: 1 }}>
+              <input style={styles.input} placeholder="Last Name" value={form.lastName}
+                onChange={(e) => setForm({ ...form, lastName: e.target.value })} />
+              {errors.lastName && <p style={styles.err}>{errors.lastName}</p>}
+            </div>
+          </div>
+
+          <label style={styles.label}>Date of Birth</label>
+          <input style={styles.input} type="date" value={form.dateOfBirth}
+            onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} />
+          {errors.dateOfBirth && <p style={styles.err}>{errors.dateOfBirth}</p>}
+
+          <label style={styles.label}>Aadhaar Number</label>
+          <input style={styles.input} placeholder="12-digit Aadhaar number" maxLength={12} value={form.aadharNumber}
+            onChange={(e) => setForm({ ...form, aadharNumber: e.target.value.replace(/\D/g, "") })} />
+          {errors.aadharNumber && <p style={styles.err}>{errors.aadharNumber}</p>}
+
+          <label style={styles.label}>PAN Number</label>
+          <input style={styles.input} placeholder="ABCDE1234F" maxLength={10}
+            value={form.panNumber}
+            onChange={(e) => setForm({ ...form, panNumber: e.target.value.toUpperCase() })} />
+          {errors.panNumber && <p style={styles.err}>{errors.panNumber}</p>}
+
+          <label style={styles.label}>Place</label>
+          <input style={styles.input} placeholder="City / Town" value={form.place}
+            onChange={(e) => setForm({ ...form, place: e.target.value })} />
+          {errors.place && <p style={styles.err}>{errors.place}</p>}
+
+          <label style={styles.label}>Account Type</label>
+          <select style={styles.input} value={form.accountType}
+            onChange={(e) => setForm({ ...form, accountType: e.target.value })}>
             <option value="SAVINGS">Savings</option>
             <option value="CURRENT">Current</option>
           </select>
+
           <input style={styles.input} type="number" step="0.01" placeholder="Initial Deposit (optional, ₹)"
-            value={initialDeposit} onChange={(e) => setInitialDeposit(e.target.value)} />
+            value={form.initialDeposit} onChange={(e) => setForm({ ...form, initialDeposit: e.target.value })} />
+
           <button style={styles.btn}>Submit Application</button>
         </form>
       </Card>
@@ -145,13 +233,16 @@ export default function Accounts() {
 }
 
 const styles = {
+  row: { display: "flex", gap: "10px" },
+  label: { fontSize: "0.8rem", color: "var(--text-secondary)", display: "block", margin: "4px 0" },
   input: {
-    width: "100%", padding: "10px", marginBottom: "10px", border: "1px solid var(--border)",
+    width: "100%", padding: "10px", marginBottom: "6px", border: "1px solid var(--border)",
     borderRadius: "8px", fontSize: "0.95rem",
   },
+  err: { color: "var(--danger-text)", fontSize: "0.75rem", marginBottom: "8px" },
   btn: {
     width: "100%", padding: "10px", background: "#0f172a", color: "#fff", border: "none",
-    borderRadius: "8px", fontWeight: 600,
+    borderRadius: "8px", fontWeight: 600, marginTop: "8px",
   },
   smallBtn: {
     padding: "8px 14px", background: "#16a34a", color: "#fff", border: "none",
