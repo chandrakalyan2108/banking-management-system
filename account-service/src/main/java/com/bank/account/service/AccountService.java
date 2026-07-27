@@ -27,14 +27,21 @@ public class AccountService {
     public Account openAccount(OpenAccountRequest request) {
         // New accounts start PENDING and must be approved by an admin before
         // any deposit, withdrawal, or transfer can happen on them. This is
-        // an account APPLICATION, not an instantly-usable account.
+        // an account APPLICATION, complete with the applicant's own details,
+        // not an instantly-usable account.
         Account account = Account.builder()
                 .accountNumber(generateAccountNumber())
                 .customerId(request.getCustomerId())
                 .accountType(request.getAccountType() != null ? request.getAccountType() : "SAVINGS")
                 .balance(request.getInitialDeposit() != null ? request.getInitialDeposit() : BigDecimal.ZERO)
-                .currency(request.getCurrency() != null ? request.getCurrency() : "USD")
+                .currency(request.getCurrency() != null ? request.getCurrency() : "INR")
                 .status("PENDING")
+                .firstName(request.getFirstName())
+                .lastName(request.getLastName())
+                .dateOfBirth(request.getDateOfBirth())
+                .aadharNumber(request.getAadharNumber())
+                .panNumber(request.getPanNumber())
+                .place(request.getPlace())
                 .build();
         return accountRepository.save(account);
     }
