@@ -10,5 +10,5 @@ public class OpenAccountRequest {
     private Long customerId;
     private String accountType = "SAVINGS";
     private BigDecimal initialDeposit = BigDecimal.ZERO;
-    private String currency = "USD";
+    private String currency = "INR";
 }
