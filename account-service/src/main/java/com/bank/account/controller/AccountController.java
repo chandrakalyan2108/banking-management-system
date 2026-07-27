@@ -2,6 +2,7 @@ package com.bank.account.controller;
 
 import com.bank.account.dto.OpenAccountRequest;
 import com.bank.account.dto.TransactionAmountRequest;
+import com.bank.account.exception.AccountNotActiveException;
 import com.bank.account.exception.AccountNotFoundException;
 import com.bank.account.exception.InsufficientFundsException;
 import com.bank.account.model.Account;
@@ -48,6 +49,11 @@ public class AccountController {
         return ResponseEntity.ok(accountService.getAllAccounts());
     }
 
+    @PatchMapping("/{id}/approve")
+    public ResponseEntity<Account> approve(@PathVariable Long id) {
+        return ResponseEntity.ok(accountService.approveAccount(id));
+    }
+
     @PostMapping("/{id}/deposit")
     public ResponseEntity<Account> deposit(@PathVariable Long id, @Valid @RequestBody TransactionAmountRequest request) {
         return ResponseEntity.ok(accountService.deposit(id, request.getAmount()));
@@ -76,5 +82,10 @@ public class AccountController {
     @ExceptionHandler(InsufficientFundsException.class)
     public ResponseEntity<?> handleInsufficientFunds(InsufficientFundsException e) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", e.getMessage()));
+    }
+
+    @ExceptionHandler(AccountNotActiveException.class)
+    public ResponseEntity<?> handleNotActive(AccountNotActiveException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
     }
 }
