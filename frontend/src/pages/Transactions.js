@@ -28,8 +28,14 @@ export default function Transactions() {
     load();
   }, [selectedAccount]);
 
+  const typeStyle = (type) => {
+    if (type === "DEPOSIT") return { color: "var(--success-text)", prefix: "+" };
+    if (type === "WITHDRAWAL") return { color: "var(--danger-text)", prefix: "-" };
+    return { color: "var(--text-primary)", prefix: "" };
+  };
+
   return (
-    <div style={{ padding: "32px" }}>
+    <div style={{ padding: "32px", maxWidth: "1000px", margin: "0 auto" }}>
       <h1>Transaction History</h1>
 
       <select style={styles.select} value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
@@ -50,24 +56,29 @@ export default function Transactions() {
             </tr>
           </thead>
           <tbody>
-            {history.map((t) => (
-              <tr key={t.id}>
-                <td style={styles.td}>{t.referenceId}</td>
-                <td style={styles.td}>{t.type}</td>
-                <td style={styles.td}>${parseFloat(t.amount).toFixed(2)}</td>
-                <td style={styles.td}>
-                  <span style={{
-                    padding: "3px 10px", borderRadius: "10px", fontSize: "0.8rem",
-                    background: t.status === "SUCCESS" ? "#dcfce7" : t.status === "FAILED" ? "#fee2e2" : "#fef9c3",
-                    color: t.status === "SUCCESS" ? "#16a34a" : t.status === "FAILED" ? "#dc2626" : "#a16207",
-                  }}>{t.status}</span>
-                </td>
-                <td style={styles.td}>{new Date(t.createdAt).toLocaleString()}</td>
-              </tr>
-            ))}
+            {history.map((t) => {
+              const ts = typeStyle(t.type);
+              return (
+                <tr key={t.id}>
+                  <td style={styles.td}>{t.referenceId}</td>
+                  <td style={styles.td}>{t.type}</td>
+                  <td style={{ ...styles.td, color: ts.color, fontWeight: 600 }}>
+                    {ts.prefix}₹{parseFloat(t.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </td>
+                  <td style={styles.td}>
+                    <span style={{
+                      padding: "3px 10px", borderRadius: "10px", fontSize: "0.8rem",
+                      background: t.status === "SUCCESS" ? "var(--success-bg)" : t.status === "FAILED" ? "var(--danger-bg)" : "var(--warning-bg)",
+                      color: t.status === "SUCCESS" ? "var(--success-text)" : t.status === "FAILED" ? "var(--danger-text)" : "var(--warning-text)",
+                    }}>{t.status}</span>
+                  </td>
+                  <td style={styles.td}>{new Date(t.createdAt).toLocaleString()}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
-        {history.length === 0 && <p style={{ color: "#64748b", padding: "16px 0" }}>No transactions found.</p>}
+        {history.length === 0 && <p style={{ color: "var(--text-secondary)", padding: "16px 0" }}>No transactions found.</p>}
       </Card>
     </div>
   );
@@ -75,9 +86,9 @@ export default function Transactions() {
 
 const styles = {
   select: {
-    padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "0.95rem",
+    padding: "10px", borderRadius: "8px", border: "1px solid var(--border)", fontSize: "0.95rem",
   },
   table: { width: "100%", borderCollapse: "collapse" },
-  th: { textAlign: "left", padding: "10px", borderBottom: "2px solid #e2e8f0", color: "#64748b", fontSize: "0.85rem" },
+  th: { textAlign: "left", padding: "10px", borderBottom: "2px solid var(--border)", color: "var(--text-secondary)", fontSize: "0.85rem" },
   td: { padding: "10px", borderBottom: "1px solid #f1f5f9", fontSize: "0.9rem" },
 };
