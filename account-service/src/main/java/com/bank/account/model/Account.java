@@ -3,6 +3,7 @@ package com.bank.account.model;
 import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
@@ -32,6 +33,16 @@ public class Account {
 
     @Builder.Default
     private String status = "PENDING";
+
+    // Applicant details captured at the time of account application.
+    // These are specific to this account application, separate from the
+    // customer's own registration profile.
+    private String firstName;
+    private String lastName;
+    private LocalDate dateOfBirth;
+    private String aadharNumber;
+    private String panNumber;
+    private String place;
 
     @Column(updatable = false)
     private LocalDateTime createdAt;
