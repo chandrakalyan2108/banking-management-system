@@ -28,10 +28,10 @@ public class Account {
     private BigDecimal balance = BigDecimal.ZERO;
 
     @Builder.Default
-    private String currency = "USD";
+    private String currency = "INR";
 
     @Builder.Default
-    private String status = "ACTIVE";
+    private String status = "PENDING";
 
     @Column(updatable = false)
     private LocalDateTime createdAt;
